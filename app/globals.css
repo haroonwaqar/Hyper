@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Small defaults for a clean mini-app look */
+html,
+body {
+  height: 100%;
+}
+
+
+
+
