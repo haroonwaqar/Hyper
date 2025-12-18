@@ -1,4 +1,4 @@
-import { LIFI_QUOTE_ENDPOINT, WORLD_CHAIN_ID, WORLDCHAIN_USDC } from '@/lib/constants'
+import { ARBITRUM_CHAIN_ID, ARBITRUM_USDC, LIFI_QUOTE_ENDPOINT, WORLD_CHAIN_ID, WORLDCHAIN_USDC } from '@/lib/constants'
 
 export type LifiQuoteTransactionRequest = {
   to: string
@@ -24,14 +24,13 @@ export async function fetchLifiQuote(params: {
   fromAmount: string
   fromAddress: string
   toAddress?: string
-  toChainId: number
-  toToken: string
 }): Promise<LifiQuoteResponse> {
   const url = new URL(LIFI_QUOTE_ENDPOINT)
   url.searchParams.set('fromChain', String(WORLD_CHAIN_ID))
-  url.searchParams.set('toChain', String(params.toChainId))
+  // Hyperliquid deposit addresses credit native USDC on Arbitrum.
+  url.searchParams.set('toChain', String(ARBITRUM_CHAIN_ID))
   url.searchParams.set('fromToken', WORLDCHAIN_USDC)
-  url.searchParams.set('toToken', params.toToken)
+  url.searchParams.set('toToken', ARBITRUM_USDC)
   url.searchParams.set('fromAmount', params.fromAmount)
   url.searchParams.set('fromAddress', params.fromAddress)
   if (params.toAddress) {
