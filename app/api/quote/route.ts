@@ -9,8 +9,6 @@ type QuoteRequestBody = {
   amountUsdc: string
   fromAddress: string
   toAddress: string
-  toChainId: number
-  toToken: string
 }
 
 function isLikelyEvmAddress(addr: string): boolean {
@@ -28,8 +26,6 @@ export async function POST(req: Request) {
   const amountUsdc = body?.amountUsdc?.trim?.() ?? ''
   const fromAddress = body?.fromAddress?.trim?.() ?? ''
   const toAddress = body?.toAddress?.trim?.() ?? ''
-  const toChainId = Number(body?.toChainId)
-  const toToken = body?.toToken?.trim?.() ?? ''
 
   if (!amountUsdc) {
     return NextResponse.json({ message: 'amountUsdc is required' }, { status: 400 })
@@ -40,12 +36,6 @@ export async function POST(req: Request) {
   if (!toAddress || !isLikelyEvmAddress(toAddress)) {
     return NextResponse.json({ message: 'toAddress must be a valid 0x address' }, { status: 400 })
   }
-  if (!Number.isFinite(toChainId) || toChainId <= 0) {
-    return NextResponse.json({ message: 'toChainId must be a positive number' }, { status: 400 })
-  }
-  if (!toToken || !isLikelyEvmAddress(toToken)) {
-    return NextResponse.json({ message: 'toToken must be a valid 0x address' }, { status: 400 })
-  }
 
   let fromAmount: string
   try {
@@ -55,7 +45,8 @@ export async function POST(req: Request) {
   }
 
   try {
-    const quote = await fetchLifiQuote({ fromAmount, fromAddress, toAddress, toChainId, toToken })
+    // Destination is fixed to Arbitrum native USDC (see lib/lifi.ts).
+    const quote = await fetchLifiQuote({ fromAmount, fromAddress, toAddress })
     return NextResponse.json(quote, { status: 200 })
   } catch (e: any) {
     // Examples: "Insufficient Liquidity", "Route not found", etc.

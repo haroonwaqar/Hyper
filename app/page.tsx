@@ -1,13 +1,12 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { MiniKit, ResponseEvent, type MiniAppSendTransactionPayload, type MiniKitInstallReturnType } from '@worldcoin/minikit-js'
-import { decodeFunctionData, encodeFunctionData, formatUnits, parseAbi } from 'viem'
+import { MiniKit, ResponseEvent, type MiniAppSendTransactionPayload } from '@worldcoin/minikit-js'
+import { encodeFunctionData, formatUnits, parseAbi } from 'viem'
+import { useRouter } from 'next/navigation'
 import {
   ARBITRUM_CHAIN_ID,
   ARBITRUM_USDC,
-  HYPEREVM_CHAIN_ID,
-  HYPEREVM_USDC,
   LIFI_DIAMOND_CONTRACT,
   WORLD_CHAIN_ID,
   WORLDCHAIN_USDC,
@@ -26,6 +25,8 @@ type Quote = {
 }
 
 const WORLDCHAIN_PUBLIC_RPC = 'https://worldchain-mainnet.g.alchemy.com/public'
+const MIN_USDC_BASE_UNITS = 6_000_000n
+const DESTINATION_STORAGE_KEY = 'hyperworld.destinationAddress'
 
 const ERC20_BALANCE_OF_ABI = [
   {
@@ -66,18 +67,17 @@ function randomUint256String(): string {
 }
 
 export default function Page() {
+  const router = useRouter()
   const [miniKitStatus, setMiniKitStatus] = useState<'checking' | 'not_installed' | 'installed'>('checking')
-  const [installResult, setInstallResult] = useState<MiniKitInstallReturnType | null>(null)
   const didInitRef = useRef(false)
 
   const [fromAddress, setFromAddress] = useState('')
   const [destinationAddress, setDestinationAddress] = useState('')
-  const [destinationTouched, setDestinationTouched] = useState(false)
-  const [destinationChain, setDestinationChain] = useState<'arbitrum' | 'hyperevm'>('arbitrum')
   const [authStatus, setAuthStatus] = useState<'idle' | 'authing' | 'authed' | 'failed'>('idle')
   const [authError, setAuthError] = useState<string | null>(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
-  const [amountUsdc, setAmountUsdc] = useState('1')
+  const [amountUsdc, setAmountUsdc] = useState('6')
 
   const [balanceLoading, setBalanceLoading] = useState(false)
   const [balanceBaseUnits, setBalanceBaseUnits] = useState<bigint | null>(null)
@@ -94,6 +94,8 @@ export default function Page() {
 
   const selector = useMemo(() => getFunctionSelector(quote?.transactionRequest?.data), [quote?.transactionRequest?.data])
 
+  const [uiStep, setUiStep] = useState<'wallet' | 'bridge'>('wallet')
+
   useEffect(() => {
     // Next dev Strict Mode runs effects twice; guard to avoid duplicate init/auth calls + "already_installed" noise.
     if (didInitRef.current) return
@@ -105,13 +107,7 @@ export default function Page() {
     // 2) Attempt walletAuth once to learn the user's EVM address (optional UX; they can still paste it)
     // Install first, then check availability. In some environments `isInstalled()` may be false
     // until after `install()` has run.
-    const res = MiniKit.install(process.env.NEXT_PUBLIC_WLD_APP_ID ?? undefined)
-    // Don't surface "already_installed" as an error in the UI.
-    if (!res.success && res.errorCode !== 'already_installed') {
-      setInstallResult(res)
-    } else {
-      setInstallResult(null)
-    }
+    MiniKit.install(process.env.NEXT_PUBLIC_WLD_APP_ID ?? undefined)
 
     const installedNow = MiniKit.isInstalled()
     setMiniKitStatus(installedNow ? 'installed' : 'not_installed')
@@ -129,8 +125,7 @@ export default function Page() {
 
         if (finalPayload.status === 'success') {
           setFromAddress(finalPayload.address)
-          // Default destination to the same address (HyperEVM addresses are typically the same).
-          setDestinationAddress(finalPayload.address)
+          // Do NOT auto-fill destination address; user should paste Hyperliquid deposit address explicitly.
           setAuthStatus('authed')
           return
         }
@@ -144,12 +139,54 @@ export default function Page() {
     })()
   }, [])
 
-  // Keep destination auto-filled with fromAddress until the user edits it.
+  // Restore destination from sessionStorage (set on /destination screen).
   useEffect(() => {
-    if (!destinationTouched && isLikelyEvmAddress(fromAddress)) {
-      setDestinationAddress(fromAddress)
+    try {
+      const stored = sessionStorage.getItem(DESTINATION_STORAGE_KEY)
+      if (stored && stored !== destinationAddress) setDestinationAddress(stored)
+    } catch {
+      // ignore
     }
-  }, [fromAddress, destinationTouched])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // If user returns from /destination with ?step=bridge, go to bridge step automatically.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('step') === 'bridge') {
+      setUiStep('bridge')
+      // Clean the URL (no query param) to keep it tidy.
+      router.replace('/')
+    }
+  }, [router])
+
+  async function onSignIn() {
+    if (miniKitStatus !== 'installed') {
+      setAuthStatus('failed')
+      setAuthError('Open this mini-app inside World App to sign in.')
+      return
+    }
+    setAuthStatus('authing')
+    setAuthError(null)
+    try {
+      const { finalPayload } = await MiniKit.commandsAsync.walletAuth({
+        nonce: crypto.randomUUID(),
+        statement: 'Authenticate to bridge USDC from World Chain to Hyperliquid (via LI.FI).',
+        requestId: 'bridge-usdc-worldchain-to-arbitrum-usdc',
+      })
+      if (finalPayload.status === 'success') {
+        setFromAddress(finalPayload.address)
+        setAuthStatus('authed')
+        return
+      }
+      setAuthStatus('failed')
+      setAuthError(finalPayload.details ?? finalPayload.error_code ?? 'Wallet auth failed')
+    } catch (e: any) {
+      setAuthStatus('failed')
+      setAuthError(e?.message ?? 'Wallet auth failed')
+    }
+  }
 
   // Fetch World Chain USDC balance via eth_call(balanceOf)
   useEffect(() => {
@@ -258,21 +295,30 @@ export default function Page() {
     return amountBaseUnits > balanceBaseUnits
   }, [amountBaseUnits, balanceBaseUnits])
 
+  const belowMinimum = useMemo(() => {
+    if (amountBaseUnits == null) return false
+    return amountBaseUnits < MIN_USDC_BASE_UNITS
+  }, [amountBaseUnits])
+
   async function fetchQuote() {
     setError(null)
     setTxId(null)
     setQuote(null)
 
     if (!isLikelyEvmAddress(fromAddress)) {
-      setError('Missing fromAddress (wallet address). If walletAuth failed, paste your 0x address.')
+      setError('Wallet address not available yet. Open this mini-app inside World App and try again.')
       return null
     }
     if (!isLikelyEvmAddress(destinationAddress)) {
-      setError('Missing destination address (Hyperliquid). Please enter a valid 0x address.')
+      setError('Paste your Hyperliquid deposit address (0x...)')
       return null
     }
     if (amountParseError) {
       setError(amountParseError)
+      return null
+    }
+    if (belowMinimum) {
+      setError('Minimum amount is 6 USDC')
       return null
     }
     if (insufficientBalance) {
@@ -282,12 +328,10 @@ export default function Page() {
 
     setQuoteLoading(true)
     try {
-      const toChainId = destinationChain === 'arbitrum' ? ARBITRUM_CHAIN_ID : HYPEREVM_CHAIN_ID
-      const toToken = destinationChain === 'arbitrum' ? ARBITRUM_USDC : HYPEREVM_USDC
       const res = await fetch('/api/quote', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amountUsdc, fromAddress, toAddress: destinationAddress, toChainId, toToken }),
+        body: JSON.stringify({ amountUsdc, fromAddress, toAddress: destinationAddress }),
       })
       const json = await res.json()
       if (!res.ok) {
@@ -301,41 +345,6 @@ export default function Page() {
     } finally {
       setQuoteLoading(false)
     }
-  }
-
-  async function rpcEthCall(to: `0x${string}`, data: `0x${string}`): Promise<`0x${string}`> {
-    const res = await fetch(WORLDCHAIN_PUBLIC_RPC, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'eth_call',
-        params: [{ to, data }, 'latest'],
-      }),
-    })
-    const json = await res.json()
-    if (!res.ok || json?.error) {
-      const msg = json?.error?.message ?? `RPC eth_call error (status ${res.status})`
-      throw new Error(msg)
-    }
-    const hex = json?.result as string
-    if (typeof hex !== 'string' || !hex.startsWith('0x')) throw new Error('Invalid RPC response')
-    return hex as `0x${string}`
-  }
-
-  async function lookupFunctionSignature(selector: string): Promise<string> {
-    // OpenChain signature DB is the most reliable public endpoint for 4-byte selector lookups.
-    // Example: https://api.openchain.xyz/signature-database/v1/lookup?function=0x1794958f
-    const res = await fetch(`https://api.openchain.xyz/signature-database/v1/lookup?function=${selector}`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-    })
-    const json = await res.json()
-    const entries = json?.result?.function?.[selector]
-    const sig = Array.isArray(entries) && entries[0]?.name ? (entries[0].name as string) : null
-    if (!sig) throw new Error(`Unknown function selector ${selector}. Cannot build ABI for World App.`)
-    return sig
   }
 
   async function sendTxAndWait(payload: any, timeoutMs = 45_000): Promise<MiniAppSendTransactionPayload> {
@@ -481,200 +490,210 @@ export default function Page() {
   return (
     <main className="mx-auto flex min-h-dvh max-w-lg flex-col justify-center px-5 py-10">
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 shadow-sm">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Bridge USDC to Hyperliquid</h1>
-            <p className="mt-1 text-sm text-zinc-300">
-              Source: World Chain ({WORLD_CHAIN_ID}) → Destination:{' '}
-              {destinationChain === 'arbitrum' ? `Arbitrum (${ARBITRUM_CHAIN_ID})` : `HyperEVM (${HYPEREVM_CHAIN_ID})`}
-            </p>
-          </div>
-          <div className="text-right text-xs text-zinc-400">
-            <div>Router</div>
-            <div className="font-mono">{shortAddr(LIFI_DIAMOND_CONTRACT)}</div>
-          </div>
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Bridge USDC to Hyperliquid</h1>
+          <p className="mt-1 text-sm text-zinc-300">
+            World Chain ({WORLD_CHAIN_ID}) → Arbitrum ({ARBITRUM_CHAIN_ID}) native USDC
+          </p>
         </div>
 
         <div className="mt-5 space-y-4">
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-sm font-medium">Wallet</div>
-              <div className="text-xs text-zinc-400">
-                {miniKitStatus === 'checking'
-                  ? 'Checking…'
-                  : miniKitStatus === 'installed'
-                    ? 'World App detected'
-                    : 'Not in World App'}
+          {uiStep === 'wallet' ? (
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium">Sign in</div>
+                <div className="text-xs text-zinc-400">
+                  {miniKitStatus === 'checking'
+                    ? 'Checking…'
+                    : miniKitStatus === 'installed'
+                      ? 'World App detected'
+                      : 'Not in World App'}
+                </div>
               </div>
-            </div>
 
-            <div className="mt-2 text-xs text-zinc-400">
-              {installResult?.success === false ? (
-                <span>
-                  MiniKit install error: <span className="font-mono">{installResult.errorCode}</span>
-                </span>
-              ) : null}
-              {authStatus === 'authing' ? <span>Authenticating…</span> : null}
-              {authStatus === 'failed' && authError ? <span className="text-red-300">{authError}</span> : null}
-            </div>
-
-            <label className="mt-3 block text-xs text-zinc-400">From address (World Chain)</label>
-            <input
-              className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none ring-0 focus:border-zinc-600"
-              placeholder="0x…"
-              value={fromAddress}
-              onChange={(e) => setFromAddress(e.target.value.trim())}
-              inputMode="text"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-            />
-
-            <label className="mt-3 block text-xs text-zinc-400">Destination Address (Hyperliquid)</label>
-            <input
-              className="mt-1 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none ring-0 focus:border-zinc-600"
-              placeholder="0x…"
-              value={destinationAddress}
-              onChange={(e) => {
-                setDestinationTouched(true)
-                setDestinationAddress(e.target.value.trim())
-              }}
-              inputMode="text"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-            />
-
-            <div className="mt-2 text-xs text-zinc-500">
-              Tokens: <span className="font-mono">{WORLDCHAIN_USDC}</span> →{' '}
-              <span className="font-mono">{destinationChain === 'arbitrum' ? ARBITRUM_USDC : HYPEREVM_USDC}</span>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-sm font-medium">Deposit Chain</div>
-              <select
-                className="rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                value={destinationChain}
-                onChange={(e) => setDestinationChain(e.target.value as any)}
-              >
-                <option value="arbitrum">Arbitrum (recommended for Hyperliquid USDC deposits)</option>
-                <option value="hyperevm">HyperEVM (experimental)</option>
-              </select>
-            </div>
-            {destinationChain !== 'arbitrum' ? (
-              <div className="mt-2 text-xs text-amber-300">
-                Hyperliquid’s deposit UI warns that this address only credits <span className="font-semibold">native USDC from Arbitrum</span>.
-                If your deposit doesn’t show up, switch back to Arbitrum.
-              </div>
-            ) : (
-              <div className="mt-2 text-xs text-zinc-400">
-                Hyperliquid USDC deposit addresses typically require <span className="font-semibold">native USDC on Arbitrum</span>.
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
-            <div className="flex items-end justify-between gap-3">
-              <label className="block text-sm font-medium">Amount (USDC)</label>
-              <div className="text-xs text-zinc-400">
-                {balanceLoading ? (
-                  'Fetching balance…'
-                ) : balanceError ? (
-                  <span className="text-red-300">{balanceError}</span>
-                ) : balanceUsdc != null ? (
-                  <span>
-                    Available: <span className="font-mono">{balanceUsdc}</span> USDC
-                  </span>
+              <div className="mt-3">
+                {authStatus === 'authed' ? (
+                  <div className="text-sm text-zinc-200">Signed in.</div>
+                ) : authStatus === 'authing' ? (
+                  <div className="text-sm text-zinc-300">Waiting for World App…</div>
                 ) : (
-                  '—'
+                  <button
+                    type="button"
+                    className="w-full rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={miniKitStatus !== 'installed'}
+                    onClick={onSignIn}
+                  >
+                    Sign in with World App
+                  </button>
                 )}
-              </div>
-            </div>
 
-            <div className="mt-2 flex items-center gap-2">
-              <input
-                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-0 focus:border-zinc-600"
-                value={amountUsdc}
-                onChange={(e) => setAmountUsdc(e.target.value)}
-                placeholder="1.00"
-                inputMode="decimal"
-              />
+                {authStatus === 'failed' && authError ? <div className="mt-2 text-xs text-red-300">{authError}</div> : null}
+              </div>
+
+              <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium">Balance (USDC.e)</div>
+                  <div className="text-xs text-zinc-400">World Chain</div>
+                </div>
+                <div className="mt-2 text-2xl font-semibold">
+                  {balanceLoading ? '—' : balanceError ? '—' : balanceUsdc != null ? balanceUsdc : '—'}
+                </div>
+                {balanceError ? <div className="mt-2 text-xs text-red-300">{balanceError}</div> : null}
+              </div>
+
               <button
                 type="button"
-                className="shrink-0 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-semibold text-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={balanceBaseUnits == null || balanceLoading}
+                className="mt-4 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={authStatus !== 'authed'}
                 onClick={() => {
-                  if (balanceBaseUnits == null) return
-                  setAmountUsdc(trimTrailingZeros(formatUnits(balanceBaseUnits, 6)))
+                  setError(null)
+                  setTxId(null)
+                  setQuote(null)
+                  router.push('/destination')
                 }}
               >
-                Max
+                Add destination address
               </button>
-            </div>
 
-            {amountParseError ? <div className="mt-2 text-sm text-red-300">{amountParseError}</div> : null}
-            {insufficientBalance ? <div className="mt-2 text-sm text-red-300">Insufficient Balance</div> : null}
-
-            <button
-              className="mt-4 w-full rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={quoteLoading || sendLoading || !!amountParseError || insufficientBalance}
-              onClick={onBridge}
-            >
-              {sendLoading ? 'Opening World App…' : quoteLoading ? 'Fetching quote…' : 'Bridge to Hyperliquid'}
-            </button>
-
-            {error ? <div className="mt-3 text-sm text-red-300">{error}</div> : null}
-            {txId ? (
-              <div className="mt-3 rounded-lg border border-emerald-900/50 bg-emerald-950/30 p-3 text-sm text-emerald-200">
-                Submitted: <span className="font-mono">{txId}</span>
+              <div className="mt-2 text-xs text-zinc-500">
+                You’ll paste the Hyperliquid deposit address next, then choose an amount and bridge.
               </div>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
+
+          {uiStep === 'bridge' ? (
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-medium">Destination</div>
+                <button
+                  type="button"
+                  className="text-xs font-semibold text-zinc-300 underline"
+                  onClick={() => router.push('/destination')}
+                >
+                  Edit
+                </button>
+              </div>
+              <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-200">
+                {destinationAddress}
+              </div>
+
+              <div className="mt-4 flex items-end justify-between gap-3">
+                <label className="block text-sm font-medium">Amount (USDC.e)</label>
+                <div className="text-xs text-zinc-400">
+                  {balanceLoading ? (
+                    'Fetching balance…'
+                  ) : balanceError ? (
+                    <span className="text-red-300">{balanceError}</span>
+                  ) : balanceUsdc != null ? (
+                    <span>
+                      Available: <span className="font-mono">{balanceUsdc}</span>
+                    </span>
+                  ) : (
+                    '—'
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-base text-zinc-100 outline-none ring-0 focus:border-zinc-600"
+                  value={amountUsdc}
+                  onChange={(e) => setAmountUsdc(e.target.value)}
+                  placeholder="6.00"
+                  inputMode="decimal"
+                />
+                <button
+                  type="button"
+                  className="shrink-0 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-semibold text-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={balanceBaseUnits == null || balanceLoading}
+                  onClick={() => {
+                    if (balanceBaseUnits == null) return
+                    setAmountUsdc(trimTrailingZeros(formatUnits(balanceBaseUnits, 6)))
+                  }}
+                >
+                  Max
+                </button>
+              </div>
+
+              <div className="mt-2 text-xs text-zinc-500">Minimum: 6 USDC</div>
+
+              {amountParseError ? <div className="mt-2 text-sm text-red-300">{amountParseError}</div> : null}
+              {belowMinimum ? <div className="mt-2 text-sm text-red-300">Minimum amount is 6 USDC</div> : null}
+              {insufficientBalance ? <div className="mt-2 text-sm text-red-300">Insufficient Balance</div> : null}
+
+              <button
+                className="mt-4 w-full rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={quoteLoading || sendLoading || !!amountParseError || insufficientBalance || belowMinimum}
+                onClick={onBridge}
+              >
+                {sendLoading ? 'Confirm in World App…' : quoteLoading ? 'Fetching quote…' : 'Bridge'}
+              </button>
+
+              {error ? <div className="mt-3 whitespace-pre-line text-sm text-red-300">{error}</div> : null}
+              {txId ? (
+                <div className="mt-3 rounded-lg border border-emerald-900/50 bg-emerald-950/30 p-3 text-sm text-emerald-200">
+                  Submitted: <span className="font-mono">{txId}</span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
-            <div className="text-sm font-medium">Whitelisting (Worldcoin Developer Portal)</div>
-            <ul className="mt-2 space-y-2 text-sm text-zinc-300">
-              <li>
-                <span className="text-zinc-400">Contract address:</span>{' '}
-                <span className="font-mono">{LIFI_DIAMOND_CONTRACT}</span>
-              </li>
-              <li>
-                <span className="text-zinc-400">Permit2Proxy (Contract Entrypoints):</span>{' '}
-                <span className="font-mono">{lifiPermit2Proxy ?? '(loading...)'}</span>
-              </li>
-              <li>
-                <span className="text-zinc-400">Permit2 Tokens (Configuration → Advanced):</span>{' '}
-                <span className="font-mono">{WORLDCHAIN_USDC}</span>
-              </li>
-              <li className="text-xs text-zinc-500">
-                Destination chain in this app is{' '}
-                <span className="font-semibold">{destinationChain === 'arbitrum' ? 'Arbitrum native USDC' : 'HyperEVM USDC'}</span>.
-              </li>
-              <li>
-                <span className="text-zinc-400">Function selector (from LI.FI calldata):</span>{' '}
-                <span className="font-mono">{selector ?? 'Fetch a quote to see it'}</span>
-              </li>
-              <li className="text-xs text-zinc-500">
-                Note: World App <span className="font-semibold">does not support ERC-20 approval transactions</span>.
-                This bridge call must succeed without a separate approve step.
-              </li>
-              <li className="text-xs text-zinc-500">
-                LI.FI routes can change (tool/bridge/fees), so selectors may differ over time. Always whitelist the
-                selector(s) your quotes return.
-              </li>
-            </ul>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between text-left text-sm font-medium"
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
+              <span>Advanced</span>
+              <span className="text-xs text-zinc-400">{showAdvanced ? 'Hide' : 'Show'}</span>
+            </button>
 
-            {quote ? (
-              <div className="mt-4 text-xs text-zinc-400">
-                Quote tool: <span className="font-mono">{quote.tool ?? 'unknown'}</span> · tx to:{' '}
-                <span className="font-mono">{shortAddr(quote.transactionRequest.to)}</span>
+            {showAdvanced ? (
+              <div className="mt-3">
+                <div className="text-sm font-medium">Whitelisting (Worldcoin Developer Portal)</div>
+                <ul className="mt-2 space-y-2 text-sm text-zinc-300">
+                  <li>
+                    <span className="text-zinc-400">LI.FI Diamond (Contract Entrypoints):</span>{' '}
+                    <span className="font-mono">{LIFI_DIAMOND_CONTRACT}</span>
+                  </li>
+                  <li>
+                    <span className="text-zinc-400">Permit2Proxy (Contract Entrypoints):</span>{' '}
+                    <span className="font-mono">{lifiPermit2Proxy ?? '(loading...)'}</span>
+                  </li>
+                  <li>
+                    <span className="text-zinc-400">Permit2 Tokens:</span>{' '}
+                    <span className="font-mono">{WORLDCHAIN_USDC}</span>
+                  </li>
+                  <li>
+                    <span className="text-zinc-400">Destination fixed:</span>{' '}
+                    <span className="font-mono">
+                      Arbitrum ({ARBITRUM_CHAIN_ID}) USDC {ARBITRUM_USDC}
+                    </span>
+                  </li>
+                  <li>
+                    <span className="text-zinc-400">Function selector (debug):</span>{' '}
+                    <span className="font-mono">{selector ?? 'Fetch a quote to see it'}</span>
+                  </li>
+                  <li className="text-xs text-zinc-500">
+                    World App does not support ERC-20 approvals; this bridge uses Permit2 (single confirmation).
+                  </li>
+                  <li className="text-xs text-zinc-500">
+                    Router: <span className="font-mono">{LIFI_DIAMOND_CONTRACT}</span>
+                  </li>
+                </ul>
+
+                {quote ? (
+                  <div className="mt-4 text-xs text-zinc-400">
+                    Quote tool: <span className="font-mono">{quote.tool ?? 'unknown'}</span> · tx to:{' '}
+                    <span className="font-mono">{shortAddr(quote.transactionRequest.to)}</span>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
         </div>
       </div>
+
     </main>
   )
 }
