@@ -8,6 +8,23 @@ body {
   height: 100%;
 }
 
+/* Prevent iOS text autosizing/zoom quirks that can cause overlapping layouts inside WebViews */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Make the mini-app feel like a native sheet */
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
+    "Segoe UI Emoji";
+  background: #f6fbff;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
 
 
 
