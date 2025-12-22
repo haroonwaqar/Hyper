@@ -1,3 +1,4 @@
+/* stylelint-disable at-rule-no-unknown */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -16,13 +17,145 @@ html {
 
 /* Make the mini-app feel like a native sheet */
 body {
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
-    "Segoe UI Emoji";
-  background: #f6fbff;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+    "Apple Color Emoji", "Segoe UI Emoji";
 }
 
 * {
   -webkit-tap-highlight-color: transparent;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  body {
+    background:
+      radial-gradient(1200px 700px at 50% -25%, rgba(24, 97, 128, 0.28), transparent 62%),
+      radial-gradient(900px 600px at 10% 0%, rgba(14, 165, 233, 0.14), transparent 60%),
+      linear-gradient(180deg, #dff2ff 0%, #f6fbff 55%, #f6fbff 100%);
+    background-attachment: fixed;
+  }
+}
+
+@layer utilities {
+  .bg-app {
+    background:
+      radial-gradient(1200px 700px at 50% -25%, rgba(56, 189, 248, 0.28), transparent 62%),
+      radial-gradient(900px 600px at 10% 0%, rgba(14, 165, 233, 0.14), transparent 60%),
+      linear-gradient(180deg, #dff2ff 0%, #f6fbff 55%, #f6fbff 100%);
+    background-attachment: fixed;
+  }
+}
+
+@layer components {
+  .card {
+    border-radius: 1.5rem; /* ~rounded-3xl */
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  }
+
+  .card-muted {
+    border-radius: 1.5rem;
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    padding: 0.95rem 1.1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    transition: background-color 150ms ease, transform 150ms ease, opacity 150ms ease;
+  }
+
+  .btn:active {
+    transform: scale(0.99);
+  }
+
+  .btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .btn-primary {
+    background: #0ea5e9; /* sky-500 */
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  }
+
+  .btn-primary:hover {
+    background: #0284c7; /* sky-600 */
+  }
+
+  .btn-secondary {
+    background: #fff;
+    color: #0f172a;
+    border: 1px solid rgba(0, 0, 0, 0.10);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  }
+
+  .btn-secondary:hover {
+    background: #f8fafc;
+  }
+
+  .btn-soft {
+    background: #f6fbff;
+    color: #0f172a;
+    border: 1px solid rgba(0, 0, 0, 0.10);
+  }
+
+  .btn-soft:hover {
+    background: #e0f2fe; /* sky-100-ish */
+  }
+
+  .btn-outline {
+    background: rgba(255, 255, 255, 0.95);
+    color: #0284c7;
+    border: 1px solid rgba(14, 165, 233, 0.35);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  }
+
+  .btn-outline:hover {
+    background: rgba(224, 242, 254, 0.65);
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 9999px;
+    padding: 0.25rem 0.625rem;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .input {
+    width: 100%;
+    border-radius: 1.25rem;
+    border: 1px solid rgba(0, 0, 0, 0.10);
+    background: #fff;
+    padding: 0.95rem 0.95rem;
+    font-size: 0.875rem;
+    color: #0f172a;
+    outline: none;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+  }
+
+  .input:focus {
+    border-color: rgba(56, 189, 248, 0.85);
+    box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.25);
+  }
+
+  .input-mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  }
 }
 
 

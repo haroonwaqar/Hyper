@@ -157,7 +157,6 @@ export default function Page() {
   const [destinationAddress, setDestinationAddress] = useState('')
   const [authStatus, setAuthStatus] = useState<'idle' | 'authing' | 'authed' | 'failed'>('idle')
   const [authError, setAuthError] = useState<string | null>(null)
-  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const [amountUsdc, setAmountUsdc] = useState('6')
 
@@ -177,6 +176,8 @@ export default function Page() {
   const [txStatusLoading, setTxStatusLoading] = useState(false)
   const [txStatusError, setTxStatusError] = useState<string | null>(null)
 
+  // selector used to be shown in Advanced; kept for internal debugging via devtools if needed.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const selector = useMemo(() => getFunctionSelector(quote?.transactionRequest?.data), [quote?.transactionRequest?.data])
 
   const [uiStep, setUiStep] = useState<'wallet' | 'bridge'>('wallet')
@@ -658,24 +659,239 @@ export default function Page() {
     }
   }, [txId])
 
+  // return (
+  //   <main className="min-h-dvh">
+  //     <div className="mx-auto flex max-w-lg flex-col px-5 pb-10 pt-10">
+  //       <header className="text-center">
+  //         <h1 className="text-3xl font-semibold tracking-tight text-black">Bridge to Hyperliquid</h1>
+  //         <p className="mt-2 text-sm text-slate-600">Send USDC from World Chain to your Hyperliquid deposit address.</p>
+  //         <p className="mt-3 text-xs text-slate-500">
+  //           Route: World Chain ({WORLD_CHAIN_ID}) → Arbitrum ({ARBITRUM_CHAIN_ID}) → Hyperliquid ({HYPEREVM_CHAIN_ID})
+  //         </p>
+  //       </header>
+
+  //       <div className="mt-8 space-y-4">
+  //         {uiStep === 'wallet' ? (
+  //           <div className="card overflow-hidden">
+  //             <div className="flex items-center justify-between gap-3 ">
+  //               <div className="text-sm font-semibold text-slate-900">Sign in</div>
+  //               <div
+  //                 className={[
+  //                   'pill',
+  //                   miniKitStatus === 'installed' ? 'bg-sky-50 text-sky-700' : 'bg-slate-100 text-slate-600',
+  //                 ].join(' ')}
+  //               >
+  //                 {miniKitStatus === 'checking'
+  //                   ? 'Checking…'
+  //                   : miniKitStatus === 'installed'
+  //                     ? 'World App'
+  //                     : 'Unsupported'}
+  //               </div>
+  //             </div>
+
+  //             <div className="mt-3">
+  //               {authStatus === 'authed' ? (
+  //                 <div className="text-sm text-slate-700">Signed in.</div>
+  //               ) : authStatus === 'authing' ? (
+  //                 <div className="text-sm text-slate-600">Waiting for World App…</div>
+  //               ) : (
+  //                 <button
+  //                   type="button"
+  //                   className="btn-primary w-full py-3.5"
+  //                   disabled={miniKitStatus !== 'installed'}
+  //                   onClick={onSignIn}
+  //                 >
+  //                   Sign in with World App
+  //                 </button>
+  //               )}
+
+  //               {authStatus === 'failed' && authError ? <div className="mt-2 text-xs text-red-600">{authError}</div> : null}
+  //             </div>
+
+  //             <div className="card-muted mt-5 p-4">
+  //               <div className="flex items-center justify-between">
+  //                 <div className="text-sm font-semibold text-slate-900">Balance</div>
+  //                 <div className="text-xs text-slate-500">USDC · World Chain</div>
+  //               </div>
+  //               <div className="mt-3 flex items-center justify-between">
+  //                 <div className="flex items-center gap-3">
+  //                   <div className="h-10 w-10 overflow-hidden rounded-full">
+  //                     <UsdcIcon className="h-10 w-10" />
+  //                   </div>
+  //                   <div>
+  //                     <div className="text-base font-semibold text-slate-900">Dollars</div>
+  //                     <div className="text-xs text-slate-500">USDC</div>
+  //                   </div>
+  //                 </div>
+  //                 <div className="text-lg font-semibold text-slate-900">
+  //                   {balanceLoading ? '—' : balanceError ? '—' : balanceUsdc != null ? balanceUsdc : '—'}
+  //                 </div>
+  //               </div>
+  //               {balanceError ? <div className="mt-2 text-xs text-red-600">{balanceError}</div> : null}
+  //             </div>
+
+  //             <button
+  //               type="button"
+  //               className="btn-primary mt-5 w-full py-3.5"
+  //               disabled={authStatus !== 'authed'}
+  //               onClick={() => {
+  //                 setError(null)
+  //                 setTxId(null)
+  //                 setQuote(null)
+  //                 router.push('/destination')
+  //               }}
+  //             >
+  //               Add destination address
+  //             </button>
+
+  //             <div className="mt-3 text-xs text-slate-500">
+  //               Add your Hyperliquid deposit address next, then choose an amount and bridge.
+  //             </div>
+  //           </div>
+  //         ) : null}
+
+  //         {uiStep === 'bridge' ? (
+  //           <div className="card p-5">
+  //             <div className="flex items-center justify-between">
+  //               <div className="text-sm font-semibold text-slate-900">Destination</div>
+  //               <button
+  //                 type="button"
+  //                 className="text-xs font-semibold text-sky-600 underline"
+  //                 onClick={() => router.push('/destination')}
+  //               >
+  //                 Edit
+  //               </button>
+  //             </div>
+  //             <div className="mt-2 max-h-20 overflow-auto rounded-2xl border border-black/10 bg-[#F6FBFF] px-3 py-3 font-mono text-xs text-slate-800 break-all">
+  //               {destinationAddress}
+  //             </div>
+
+  //             <div className="mt-4 flex items-end justify-between gap-3">
+  //               <label className="block text-sm font-semibold text-slate-900">Amount</label>
+  //               <div className="text-xs text-slate-500">
+  //                 {balanceLoading ? (
+  //                   'Fetching balance…'
+  //                 ) : balanceError ? (
+  //                   <span className="text-red-600">{balanceError}</span>
+  //                 ) : balanceUsdc != null ? (
+  //                   <span>
+  //                     Available: <span className="font-mono">{balanceUsdc}</span>
+  //                   </span>
+  //                 ) : (
+  //                   '—'
+  //                 )}
+  //               </div>
+  //             </div>
+
+  //             <div className="mt-2 flex items-center gap-2 rounded-[1.25rem] border border-black/10 bg-white px-3 py-2.5 transition focus-within:border-sky-400 focus-within:ring-4 focus-within:ring-sky-200">
+  //               <input
+  //                 className="w-full bg-transparent text-base text-slate-900 outline-none placeholder:text-slate-400"
+  //                 value={amountUsdc}
+  //                 onChange={(e) => setAmountUsdc(e.target.value)}
+  //                 placeholder="6.00"
+  //                 inputMode="decimal"
+  //               />
+  //               <button
+  //                 type="button"
+  //                 className="shrink-0 rounded-full bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+  //                 disabled={balanceBaseUnits == null || balanceLoading}
+  //                 onClick={() => {
+  //                   if (balanceBaseUnits == null) return
+  //                   setAmountUsdc(trimTrailingZeros(formatUnits(balanceBaseUnits, 6)))
+  //                 }}
+  //               >
+  //                 Max
+  //               </button>
+  //             </div>
+
+  //             <div className="mt-2 text-xs text-slate-500">Minimum: 6 USDC</div>
+
+  //             {amountParseError ? <div className="mt-2 text-sm text-red-600">{amountParseError}</div> : null}
+  //             {belowMinimum ? <div className="mt-2 text-sm text-red-600">Minimum amount is 6 USDC</div> : null}
+  //             {insufficientBalance ? <div className="mt-2 text-sm text-red-600">Insufficient Balance</div> : null}
+
+  //             <button
+  //               className="btn-primary mt-5 w-full py-3.5"
+  //               disabled={quoteLoading || sendLoading || !!amountParseError || insufficientBalance || belowMinimum}
+  //               onClick={onBridge}
+  //             >
+  //               {sendLoading ? 'Confirm in World App…' : quoteLoading ? 'Fetching route…' : 'Bridge'}
+  //             </button>
+
+  //             {error ? <div className="mt-3 whitespace-pre-line text-sm text-red-600">{error}</div> : null}
+  //             {txId ? (
+  //               <div className="card-muted mt-5 p-4">
+  //                 <div className="flex items-center justify-between">
+  //                   <div className="text-sm font-semibold text-slate-900">Transfer status</div>
+  //                   <div className="text-xs text-slate-500 font-mono">{txId.slice(0, 10)}…</div>
+  //                 </div>
+  //                 {(() => {
+  //                   const t = deriveTransferStep({ txId, txStatus, txStatusLoading, txStatusError })
+  //                   const badge =
+  //                     t.step === 'done'
+  //                       ? 'bg-emerald-50 text-emerald-700'
+  //                       : t.step === 'failed'
+  //                         ? 'bg-red-50 text-red-700'
+  //                         : 'bg-sky-50 text-sky-700'
+  //                   return (
+  //                     <div className="mt-3">
+  //                       <div className="flex items-center justify-between">
+  //                         <div className={['inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold', badge].join(' ')}>
+  //                           {t.message}
+  //                         </div>
+  //                         <div className="text-xs text-slate-500">{txStatusLoading ? 'Updating…' : ''}</div>
+  //                       </div>
+  //                       {t.statusText ? <div className="mt-2 text-sm text-slate-600">Status: {t.statusText}</div> : null}
+  //                       {txStatus?.transactionHash ? (
+  //                         <div className="mt-2 text-xs text-slate-500">
+  //                           Hash: <span className="font-mono break-all">{txStatus.transactionHash}</span>
+  //                           <div className="mt-2">
+  //                             <a
+  //                               className="pill bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100"
+  //                               href={`https://worldscan.org/tx/${txStatus.transactionHash}`}
+  //                               target="_blank"
+  //                               rel="noreferrer"
+  //                             >
+  //                               View transaction
+  //                             </a>
+  //                           </div>
+  //                         </div>
+  //                       ) : null}
+  //                     </div>
+  //                   )
+  //                 })()}
+  //               </div>
+  //             ) : null}
+  //           </div>
+  //         ) : null}
+
+  //       </div>
+  //     </div>
+
+  //   </main>
+  // )
   return (
     <main className="min-h-dvh">
       <div className="mx-auto flex max-w-lg flex-col px-5 pb-10 pt-10">
         <header className="text-center">
-          <h1 className="text-4xl font-semibold tracking-tight text-black">Bridge USDC to Hyperliquid</h1>
-          <p className="mt-3 text-sm text-slate-500">
-            World Chain ({WORLD_CHAIN_ID}) → Arbitrum ({ARBITRUM_CHAIN_ID}) → HyperLiquid ({HYPEREVM_CHAIN_ID})
+          <h1 className="text-3xl font-semibold tracking-tight text-black">Bridge to Hyperliquid</h1>
+          <p className="mt-2 text-sm text-slate-600">Send USDC from World Chain to your Hyperliquid deposit address.</p>
+          <p className="mt-3 text-xs text-slate-500">
+            Route: World Chain ({WORLD_CHAIN_ID}) → Arbitrum ({ARBITRUM_CHAIN_ID}) → Hyperliquid ({HYPEREVM_CHAIN_ID})
           </p>
         </header>
 
         <div className="mt-8 space-y-4">
           {uiStep === 'wallet' ? (
-            <div className="rounded-3xl border border-black/5 bg-white p-5 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
+            /* FIX 1: Remove 'p-5' from parent card, keep 'overflow-hidden' */
+            <div className="card overflow-hidden bg-white">
+              
+              {/* FIX 2: Add 'p-5' to this header section so text isn't cut off */}
+              <div className="flex items-center justify-between gap-3 p-5">
                 <div className="text-sm font-semibold text-slate-900">Sign in</div>
                 <div
                   className={[
-                    'rounded-full px-2.5 py-1 text-[11px] font-semibold',
+                    'pill',
                     miniKitStatus === 'installed' ? 'bg-sky-50 text-sky-700' : 'bg-slate-100 text-slate-600',
                   ].join(' ')}
                 >
@@ -687,15 +903,17 @@ export default function Page() {
                 </div>
               </div>
 
-              <div className="mt-3">
+              {/* FIX 3: Wrapper for the Sign In area */}
+              <div>
                 {authStatus === 'authed' ? (
-                  <div className="text-sm text-slate-700">Signed in.</div>
+                  <div className="px-5 pb-5 text-sm text-slate-700">Signed in.</div>
                 ) : authStatus === 'authing' ? (
-                  <div className="text-sm text-slate-600">Waiting for World App…</div>
+                  <div className="px-5 pb-5 text-sm text-slate-600">Waiting for World App…</div>
                 ) : (
+                  /* FIX 4: Full width button (w-full), no rounded corners (rounded-none), removed specific margins */
                   <button
                     type="button"
-                    className="w-full rounded-2xl bg-sky-500 px-4 py-3.5 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+                    className="btn-primary w-full rounded-none py-3.5"
                     disabled={miniKitStatus !== 'installed'}
                     onClick={onSignIn}
                   >
@@ -703,34 +921,39 @@ export default function Page() {
                   </button>
                 )}
 
-                {authStatus === 'failed' && authError ? <div className="mt-2 text-xs text-red-600">{authError}</div> : null}
+                {authStatus === 'failed' && authError ? <div className="px-5 pb-2 text-xs text-red-600">{authError}</div> : null}
               </div>
 
-              <div className="mt-5 rounded-3xl border border-black/5 bg-[#F6FBFF] p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold text-slate-900">Balance</div>
-                  <div className="text-xs text-slate-500">USDC.e · World Chain</div>
-                </div>
-                <div className="mt-3 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 overflow-hidden rounded-full">
-                      <UsdcIcon className="h-10 w-10" />
+              {/* FIX 5: Balance Section - Add padding here since parent has none */}
+              <div className="p-5"> 
+                {/* Changed from 'card-muted' to standard div to fit the 'striped' list look better, or keep card-muted if preferred but ensure margin is handled */}
+                <div className="card-muted p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-semibold text-slate-900">Balance</div>
+                    <div className="text-xs text-slate-500">USDC · World Chain</div>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 overflow-hidden rounded-full">
+                        <UsdcIcon className="h-10 w-10" />
+                      </div>
+                      <div>
+                        <div className="text-base font-semibold text-slate-900">Dollars</div>
+                        <div className="text-xs text-slate-500">USDC</div>
+                      </div>
                     </div>
-                    <div>
-                      <div className="text-base font-semibold text-slate-900">Dollars</div>
-                      <div className="text-xs text-slate-500">USDC.e</div>
+                    <div className="text-lg font-semibold text-slate-900">
+                      {balanceLoading ? '—' : balanceError ? '—' : balanceUsdc != null ? balanceUsdc : '—'}
                     </div>
                   </div>
-                  <div className="text-lg font-semibold text-slate-900">
-                    {balanceLoading ? '—' : balanceError ? '—' : balanceUsdc != null ? balanceUsdc : '—'}
-                  </div>
+                  {balanceError ? <div className="mt-2 text-xs text-red-600">{balanceError}</div> : null}
                 </div>
-                {balanceError ? <div className="mt-2 text-xs text-red-600">{balanceError}</div> : null}
               </div>
 
+              {/* FIX 6: Full width destination button */}
               <button
                 type="button"
-                className="mt-5 w-full rounded-2xl border border-black/10 bg-white px-4 py-3.5 text-sm font-semibold text-slate-900 shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+                className="btn-primary w-full rounded-none py-3.5"
                 disabled={authStatus !== 'authed'}
                 onClick={() => {
                   setError(null)
@@ -742,14 +965,15 @@ export default function Page() {
                 Add destination address
               </button>
 
-              <div className="mt-3 text-xs text-slate-500">
+              {/* FIX 7: Footer text with padding */}
+              <div className="bg-slate-50 p-4 text-center text-xs text-slate-500">
                 Add your Hyperliquid deposit address next, then choose an amount and bridge.
               </div>
             </div>
           ) : null}
 
           {uiStep === 'bridge' ? (
-            <div className="rounded-3xl border border-black/5 bg-white p-5 shadow-sm">
+            <div className="card p-5">
               <div className="flex items-center justify-between">
                 <div className="text-sm font-semibold text-slate-900">Destination</div>
                 <button
@@ -760,7 +984,7 @@ export default function Page() {
                   Edit
                 </button>
               </div>
-              <div className="mt-2 rounded-2xl border border-black/10 bg-[#F6FBFF] px-3 py-3 font-mono text-xs text-slate-800">
+              <div className="mt-2 max-h-20 overflow-auto rounded-2xl border border-black/10 bg-[#F6FBFF] px-3 py-3 font-mono text-xs text-slate-800 break-all">
                 {destinationAddress}
               </div>
 
@@ -781,9 +1005,9 @@ export default function Page() {
                 </div>
               </div>
 
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-2 flex items-center gap-2 rounded-[1.25rem] border border-black/10 bg-white px-3 py-2.5 transition focus-within:border-sky-400 focus-within:ring-4 focus-within:ring-sky-200">
                 <input
-                  className="w-full rounded-2xl border border-black/10 bg-white px-3 py-3 text-base text-slate-900 outline-none ring-0 focus:border-sky-400 focus:ring-4 focus:ring-sky-200"
+                  className="w-full bg-transparent text-base text-slate-900 outline-none placeholder:text-slate-400"
                   value={amountUsdc}
                   onChange={(e) => setAmountUsdc(e.target.value)}
                   placeholder="6.00"
@@ -791,7 +1015,7 @@ export default function Page() {
                 />
                 <button
                   type="button"
-                  className="shrink-0 rounded-2xl border border-black/10 bg-[#F6FBFF] px-4 py-3 text-sm font-semibold text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="shrink-0 rounded-full bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={balanceBaseUnits == null || balanceLoading}
                   onClick={() => {
                     if (balanceBaseUnits == null) return
@@ -809,7 +1033,7 @@ export default function Page() {
               {insufficientBalance ? <div className="mt-2 text-sm text-red-600">Insufficient Balance</div> : null}
 
               <button
-                className="mt-5 w-full rounded-2xl bg-sky-500 px-4 py-3.5 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+                className="btn-primary mt-5 w-full py-3.5"
                 disabled={quoteLoading || sendLoading || !!amountParseError || insufficientBalance || belowMinimum}
                 onClick={onBridge}
               >
@@ -818,7 +1042,7 @@ export default function Page() {
 
               {error ? <div className="mt-3 whitespace-pre-line text-sm text-red-600">{error}</div> : null}
               {txId ? (
-                <div className="mt-5 rounded-3xl border border-black/5 bg-[#F6FBFF] p-4">
+                <div className="card-muted mt-5 p-4">
                   <div className="flex items-center justify-between">
                     <div className="text-sm font-semibold text-slate-900">Transfer status</div>
                     <div className="text-xs text-slate-500 font-mono">{txId.slice(0, 10)}…</div>
@@ -845,7 +1069,7 @@ export default function Page() {
                             Hash: <span className="font-mono break-all">{txStatus.transactionHash}</span>
                             <div className="mt-2">
                               <a
-                                className="inline-flex items-center rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700"
+                                className="pill bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100"
                                 href={`https://worldscan.org/tx/${txStatus.transactionHash}`}
                                 target="_blank"
                                 rel="noreferrer"
@@ -862,63 +1086,8 @@ export default function Page() {
               ) : null}
             </div>
           ) : null}
-
-          <div className="rounded-3xl border border-black/5 bg-white p-5 shadow-sm">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between text-left text-sm font-semibold text-slate-900"
-              onClick={() => setShowAdvanced((v) => !v)}
-            >
-              <span>Advanced</span>
-              <span className="text-xs text-slate-500">{showAdvanced ? 'Hide' : 'Show'}</span>
-            </button>
-
-            {showAdvanced ? (
-              <div className="mt-3">
-                <div className="text-sm font-semibold text-slate-900">Whitelisting (Worldcoin Developer Portal)</div>
-                <ul className="mt-2 space-y-2 text-sm text-slate-700">
-                  <li>
-                    <span className="text-slate-500">LI.FI Diamond (Contract Entrypoints):</span>{' '}
-                    <span className="font-mono">{LIFI_DIAMOND_CONTRACT}</span>
-                  </li>
-                  <li>
-                    <span className="text-slate-500">Permit2Proxy (Contract Entrypoints):</span>{' '}
-                    <span className="font-mono">{lifiPermit2Proxy ?? '(loading...)'}</span>
-                  </li>
-                  <li>
-                    <span className="text-slate-500">Permit2 Tokens:</span>{' '}
-                    <span className="font-mono">{WORLDCHAIN_USDC}</span>
-                  </li>
-                  <li>
-                    <span className="text-slate-500">Destination fixed:</span>{' '}
-                    <span className="font-mono">
-                      Arbitrum ({ARBITRUM_CHAIN_ID}) USDC {ARBITRUM_USDC}
-                    </span>
-                  </li>
-                  <li>
-                    <span className="text-slate-500">Function selector (debug):</span>{' '}
-                    <span className="font-mono">{selector ?? 'Fetch a quote to see it'}</span>
-                  </li>
-                  <li className="text-xs text-slate-500">
-                    World App does not support ERC-20 approvals; this bridge uses Permit2 (single confirmation).
-                  </li>
-                  <li className="text-xs text-slate-500">
-                    Router: <span className="font-mono">{LIFI_DIAMOND_CONTRACT}</span>
-                  </li>
-                </ul>
-
-                {quote ? (
-                  <div className="mt-4 text-xs text-slate-500">
-                    Quote tool: <span className="font-mono">{quote.tool ?? 'unknown'}</span> · tx to:{' '}
-                    <span className="font-mono">{shortAddr(quote.transactionRequest.to)}</span>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
         </div>
       </div>
-
     </main>
   )
 }
