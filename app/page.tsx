@@ -688,13 +688,13 @@ export default function Page() {
               </div>
 
               {/* FIX 3: Wrapper for the Sign In area */}
-              <div>
+              <div className=''>
                 {authStatus === 'authed' ? (
-                  <div className="px-5 pb-5 text-sm text-slate-700">Signed in.</div>
+                  <div className=""></div>
                 ) : authStatus === 'authing' ? (
-                  <div className="px-5 pb-5 text-sm text-slate-600">Waiting for World App…</div>
+                  <div className="pl-[15px] pb-5 text-sm text-slate-600">Waiting for World App…</div>
                 ) : (
-                  /* FIX 4: Full width button (w-full), no rounded corners (rounded-none), removed specific margins */
+                  /* FIX 4: Full width button (w-full) */
                   <button
                     type="button"
                     className="btn-primary w-full py-3.5"
@@ -747,29 +747,30 @@ export default function Page() {
               </button>
 
               {/* FIX 7: Footer text with padding */}
-              <div className="bg-slate-50 p-[15px] text-center text-xs text-slate-500">
+              <div className="bg-slate-50 p-[8px] text-center text-xs text-slate-500">
                 Add your Hyperliquid deposit address
               </div>
             </div>
           ) : null}
 
           {uiStep === 'bridge' ? (
-            <div className="card p-5">
-              <div className="flex items-center justify-between">
+            <div className="card p-[10px]">
+              <div className="pb-[3px] flex items-center justify-between">
                 <div className="text-sm font-semibold text-slate-900">Destination</div>
                 <button
                   type="button"
-                  className="text-xs font-semibold text-sky-600 underline"
+                  className="btn-paste text-sm"
                   onClick={() => router.push('/destination')}
                 >
                   Edit
                 </button>
               </div>
-              <div className="mt-2 max-h-20 overflow-auto rounded-2xl border border-black/10 bg-[#F6FBFF] px-3 py-3 font-mono text-xs text-slate-800 break-all">
+              
+              <div className="w-full border border-black/10 bg-[#F6FBFF] px-3 py-3 font-mono text-xs text-slate-900 truncate">
                 {destinationAddress}
               </div>
 
-              <div className="mt-4 flex items-end justify-between gap-3">
+              <div className="pt-[20px] pb-[3px] flex items-end justify-between gap-3">
                 <label className="block text-sm font-semibold text-slate-900">Amount</label>
                 <div className="text-xs text-slate-500">
                   {balanceLoading ? (
@@ -786,9 +787,9 @@ export default function Page() {
                 </div>
               </div>
 
-              <div className="mt-2 flex items-center gap-2 rounded-[1.25rem] border border-black/10 bg-white px-3 py-2.5 transition focus-within:border-sky-400 focus-within:ring-4 focus-within:ring-sky-200">
+              <div className="w-full flex items-center gap-2 bg-white p-1.5 py-2.5 transition focus-within:border-sky-400 focus-within:ring-4 focus-within:ring-sky-200">
                 <input
-                  className="w-full bg-transparent text-base text-slate-900 outline-none placeholder:text-slate-400"
+                  className="flex-1 bg-transparent pl-4 font-mono text-base text-slate-900 outline-none placeholder:text-slate-400"
                   value={amountUsdc}
                   onChange={(e) => setAmountUsdc(e.target.value)}
                   placeholder="6.00"
@@ -796,7 +797,7 @@ export default function Page() {
                 />
                 <button
                   type="button"
-                  className="shrink-0 rounded-full bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="btn-paste text-sm"
                   disabled={balanceBaseUnits == null || balanceLoading}
                   onClick={() => {
                     if (balanceBaseUnits == null) return
@@ -807,11 +808,11 @@ export default function Page() {
                 </button>
               </div>
 
-              <div className="mt-2 text-xs text-slate-500">Minimum: 6 USDC</div>
+              <div className="pt-[20px] pb-[3px] text-xs text-slate-500">Minimum: 6 USDC</div>
 
-              {amountParseError ? <div className="mt-2 text-sm text-red-600">{amountParseError}</div> : null}
-              {belowMinimum ? <div className="mt-2 text-sm text-red-600">Minimum amount is 6 USDC</div> : null}
-              {insufficientBalance ? <div className="mt-2 text-sm text-red-600">Insufficient Balance</div> : null}
+              {amountParseError ? <div className="pb-[3px] text-sm text-red-600">{amountParseError}</div> : null}
+              {belowMinimum ? <div className="pb-[3px] text-sm text-red-600">Minimum amount is 6 USDC</div> : null}
+              {insufficientBalance ? <div className="pb-[3px] text-sm text-red-600">Insufficient Balance</div> : null}
 
               <button
                 className="btn-primary mt-5 w-full py-3.5"
@@ -821,9 +822,9 @@ export default function Page() {
                 {sendLoading ? 'Confirm in World App…' : quoteLoading ? 'Fetching route…' : 'Bridge'}
               </button>
 
-              {error ? <div className="mt-3 whitespace-pre-line text-sm text-red-600">{error}</div> : null}
+              {error ? <div className="pt-[3px] whitespace-pre-line text-sm text-red-600">{error}</div> : null}
               {txId ? (
-                <div className="card-muted mt-5 p-4">
+                <div className="card-muted pt-[5px] p-4">
                   <div className="flex items-center justify-between">
                     <div className="text-sm font-semibold text-slate-900">Transfer status</div>
                     <div className="text-xs text-slate-500 font-mono">{txId.slice(0, 10)}…</div>
@@ -837,7 +838,7 @@ export default function Page() {
                           ? 'bg-red-50 text-red-700'
                           : 'bg-sky-50 text-sky-700'
                     return (
-                      <div className="mt-3">
+                      <div className="pt-[3px]">
                         <div className="flex items-center justify-between">
                           <div className={['inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold', badge].join(' ')}>
                             {t.message}
@@ -846,9 +847,9 @@ export default function Page() {
                         </div>
                         {t.statusText ? <div className="mt-2 text-sm text-slate-600">Status: {t.statusText}</div> : null}
                         {txStatus?.transactionHash ? (
-                          <div className="mt-2 text-xs text-slate-500">
+                          <div className="pt-[2px] text-xs text-slate-500">
                             Hash: <span className="font-mono break-all">{txStatus.transactionHash}</span>
-                            <div className="mt-2">
+                            <div className="pt-[2px]">
                               <a
                                 className="pill bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100"
                                 href={`https://worldscan.org/tx/${txStatus.transactionHash}`}

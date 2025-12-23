@@ -20,22 +20,24 @@ export default function HyperliquidPage() {
   return (
     <main className="min-h-dvh">
       <div className="mx-auto flex min-h-dvh max-w-lg flex-col">
-        <header className="sticky top-0 z-10 bg-[#F6FBFF]/80 px-5 pb-3 pt-6 backdrop-blur">
-          <div className="flex items-center justify-between">
+        <div className="card p-[10px] bg-[#F6FBFF]/80">
+          <div className=" flex items-center justify-between">
             <button
               type="button"
-              className="btn-secondary px-4 py-2.5"
+              className="btn-soft"
               onClick={() => router.back()}
             >
               Back
             </button>
-            <div className="text-sm font-semibold text-slate-900">Hyperliquid</div>
-            <div className="w-[76px]" />
+            <h2 className="text-sm font-semibold text-slate-900">Hyperliquid</h2>
+            <div className="w-[36px]" />
           </div>
-          <p className="mt-3 text-xs text-slate-500">
-            Create/copy your deposit address, then hit Back to return to the mini app.
+          <p className="text-xs text-slate-500">
+            Create/copy your deposit address, then hit Back to return.
           </p>
-        </header>
+        </div>
+
+        <div className='pb-[7px]'></div>
 
         {timedOut ? (
           <div className="px-5 pt-6">

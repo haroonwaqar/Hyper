@@ -85,27 +85,21 @@ export default function DestinationPage() {
           <p className="mt-2 text-sm text-slate-600">Paste your Hyperliquid USDC deposit address.</p>
         </header>
 
-        <div className="card mt-8 p-6">
-          <div className="flex items-start justify-between gap-3">
+        <div className="p-[10px] card space-y-4">
+          <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Destination</h2>
-              <p className="mt-1 text-sm text-slate-600">
-                Paste your <span className="font-semibold">Hyperliquid deposit address</span>.
-              </p>
-              <p className="mt-2 text-xs text-slate-500">
-                Hyperliquid credits deposits as <span className="font-semibold">native USDC on Arbitrum</span>.
-              </p>
             </div>
-            <button type="button" className="btn-soft px-4 py-2.5" onClick={() => router.back()}>
+            <button type="button" className="btn-soft" onClick={() => router.back()}>
               Back
             </button>
           </div>
 
-          <div className="mt-5">
-            <label className="block text-xs text-slate-500">Address</label>
-            <div className="mt-1 flex items-center gap-2 rounded-2xl border border-black/10 bg-white px-3 py-2.5 transition focus-within:border-sky-400 focus-within:ring-4 focus-within:ring-sky-200">
+          <div className="pb-[15px]">
+            <label className="pb-[3px] block text-xs text-slate-500">Address</label>
+            <div className="mt-1 w-full flex items-center gap-2 bg-white p-1.5 py-2.5 transition focus-within:border-sky-400 focus-within:ring-4 focus-within:ring-sky-200">
               <input
-                className="w-full bg-transparent font-mono text-sm text-slate-900 outline-none placeholder:text-slate-400"
+                className="flex-1  bg-transparent pl-4 font-mono text-base text-slate-900 outline-none placeholder:text-slate-400"
                 placeholder="0x123... or name.eth"
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
@@ -117,7 +111,7 @@ export default function DestinationPage() {
               />
               <button
                 type="button"
-                className="shrink-0 rounded-xl bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                className="btn-paste text-sm"
                 onClick={onPaste}
               >
                 Paste
@@ -125,13 +119,15 @@ export default function DestinationPage() {
             </div>
           </div>
 
-          {error ? <div className="mt-2 text-sm text-red-600">{error}</div> : null}
-          {clipboardError ? <div className="mt-2 text-xs text-slate-500">{clipboardError}</div> : null}
-          {openError ? <div className="mt-2 text-xs text-slate-500">{openError}</div> : null}
+          {error ? <div className="pb-[15px] text-sm text-red-600">{error}</div> : null}
+          {clipboardError ? <div className="pb-[15px] text-xs text-slate-500">{clipboardError}</div> : null}
+          {openError ? <div className="pb-[15px] text-xs text-slate-500">{openError}</div> : null}
 
           <button type="button" className="btn-outline mt-6 w-full" onClick={onOpenHyperliquid}>
             Open Hyperliquid
           </button>
+
+          <div className='pb-[7px]'></div>
 
           <button type="button" className="btn-primary mt-4 w-full py-3.5" onClick={onContinue}>
             Continue

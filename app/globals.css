@@ -111,6 +111,16 @@ body {
   .btn-soft {
     background: #f6fbff;
     color: #0f172a;
+    padding: 0.35rem;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(0, 0, 0, 0.10);
+  }
+
+  .btn-paste {
+    background: #f6fbff;
+    color: #0f172a;
+    padding: 0.24rem;
+    border-radius: 0.25rem;
     border: 1px solid rgba(0, 0, 0, 0.10);
   }
 
@@ -121,6 +131,8 @@ body {
   .btn-outline {
     background: rgba(255, 255, 255, 0.95);
     color: #0284c7;
+    padding: 0.30rem;
+    border-radius: 0.25rem;
     border: 1px solid rgba(14, 165, 233, 0.35);
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   }
