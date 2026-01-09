@@ -8,7 +8,7 @@ export interface HyperliquidAgentPayload {
         name: string;
         version: string;
         chainId: number;
-        verifyingContract: string;
+        verifyingContract: `0x${string}`;
     };
     types: {
         Agent: Array<{ name: string; type: string }>;
@@ -42,7 +42,7 @@ export function createHyperliquidAgentPayload(
             name: 'Exchange',
             version: '1',
             chainId,
-            verifyingContract: '0x0000000000000000000000000000000000000000', // Hyperliquid exchange contract
+            verifyingContract: '0x0000000000000000000000000000000000000000' as `0x${string}`,
         },
         types: {
             Agent: [
