@@ -106,13 +106,15 @@ router.post('/authorize', async (req: Request, res: Response): Promise<void> => 
         );
 
         res.json({
-            success: true,
-            message: 'Agent authorized successfully',
-            transactionHash: result.transactionHash
+            success: result.success,
+            message: result.message,
+            agentAddress: result.agentAddress,
         });
     } catch (error) {
-        console.error('Error authorizing agent:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('[Route] ❌ Error authorizing agent:', error);
+        res.status(500).json({
+            error: error instanceof Error ? error.message : 'Internal server error'
+        });
     }
 });
 

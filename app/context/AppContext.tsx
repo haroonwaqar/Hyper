@@ -163,21 +163,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!userAddress) throw new Error('Not authenticated');
 
         try {
+            console.log('[AppContext] 🚀 Starting agent creation...');
+            console.log('[AppContext] User address:', userAddress);
+            console.log('[AppContext] Strategy:', strategy);
+
             setAgentLoading(true);
             setAgentError(null);
 
             // Create agent
+            console.log('[AppContext] 📝 Calling createAgent API...');
             const { address, isNew } = await createAgent(userAddress);
+            console.log('[AppContext] ✅ Agent created:', { address, isNew });
 
             // Set strategy
             const leverage = strategy === 'Aggressive' ? 3 : strategy === 'Moderate' ? 2 : 1;
+            console.log('[AppContext] ⚙️  Setting strategy:', { risk: strategy, leverage });
             await updateStrategy(userAddress, { risk: strategy, leverage });
+            console.log('[AppContext] ✅ Strategy updated');
 
             // Refresh agent data
+            console.log('[AppContext] 🔄 Refreshing agent data...');
             await checkForAgent();
+            console.log('[AppContext] ✅ Agent creation complete!');
 
             return;
         } catch (error) {
+            console.error('[AppContext] ❌ Error creating agent:');
+            console.error('[AppContext]   ', error);
             const message = error instanceof Error ? error.message : 'Failed to create agent';
             setAgentError(message);
             throw error;

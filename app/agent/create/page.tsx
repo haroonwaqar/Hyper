@@ -79,18 +79,24 @@ export default function CreateAgentPage() {
         const selectedStrategy = strategies.find(s => s.id === selected);
         if (!selectedStrategy) return;
 
+        console.log('[CreateAgent] 🎯 Creating agent with strategy:', selectedStrategy);
+
         try {
             setIsCreating(true);
             setError(null);
 
             // Create agent with selected strategy
+            console.log('[CreateAgent] 📞 Calling createUserAgent...');
             await createUserAgent(selectedStrategy.risk);
+            console.log('[CreateAgent] ✅ Success! Redirecting to dashboard...');
 
             // Success! Navigate to dashboard
             router.push('/dashboard?created=true');
         } catch (err) {
-            console.error('Failed to create agent:', err);
-            setError(err instanceof Error ? err.message : 'Failed to create agent');
+            console.error('[CreateAgent] ❌ Error:', err);
+            const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+            console.error('[CreateAgent] Error message:', errorMessage);
+            setError(errorMessage);
         } finally {
             setIsCreating(false);
         }

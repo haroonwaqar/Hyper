@@ -2,6 +2,7 @@ import './config.js';
 import express from 'express';
 import cors from 'cors';
 import agentRoutes from './routes/agentRoutes.js';
+import userRoutes from './routes/userRoutes.js';
 import { Router } from 'express';
 import { prisma } from './db.js';
 import { encrypt, decrypt } from './utils/encryption.js';
@@ -34,6 +35,7 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/agent', agentRoutes);
+app.use('/user', userRoutes);
 
 // Test endpoint for debugging Railway deployment
 app.get('/test', async (req, res) => {
