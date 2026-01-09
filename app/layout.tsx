@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { Inter } from 'next/font/google'
+import { AppProvider } from './context/AppContext'
 
 const inter = Inter({
   subsets: ['latin'],
@@ -9,8 +10,8 @@ const inter = Inter({
 })
 
 export const metadata: Metadata = {
-  title: 'Bridge USDC to Hyperliquid',
-  description: 'World App Mini-App: Bridge USDC from World Chain to Hyperliquid via LI.FI.',
+  title: 'HyperWorld - AI Trading Agents',
+  description: 'Deploy AI trading agents on Hyperliquid from World App',
 }
 
 // Disable zooming (World App mini dapps commonly lock zoom to avoid layout issues)
@@ -25,7 +26,9 @@ export const viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="min-h-dvh bg-app text-black antialiased">{children}</body>
+      <body className="min-h-dvh antialiased">
+        <AppProvider>{children}</AppProvider>
+      </body>
     </html>
   )
 }

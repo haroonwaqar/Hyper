@@ -2,6 +2,9 @@ import './config.js';
 import express from 'express';
 import cors from 'cors';
 import agentRoutes from './routes/agentRoutes.js';
+import { Router } from 'express';
+import { prisma } from './db.js';
+import { encrypt, decrypt } from './utils/encryption.js';
 import { TradingEngine } from './services/engine.js';
 
 const app = express();
@@ -31,6 +34,48 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/agent', agentRoutes);
+
+// Test endpoint for debugging Railway deployment
+app.get('/test', async (req, res) => {
+    try {
+        console.log('[Test] Endpoint hit');
+
+        const tests: any = {
+            server: 'OK',
+            timestamp: new Date().toISOString(),
+            env: {
+                NODE_ENV: process.env.NODE_ENV,
+                hasTursoUrl: !!process.env.TURSO_DATABASE_URL,
+                hasTursoToken: !!process.env.TURSO_AUTH_TOKEN,
+                hasEncryptionKey: !!process.env.ENCRYPTION_KEY,
+            }
+        };
+
+        // Test Prisma
+        try {
+            await prisma.$connect();
+            tests.database = 'Connected';
+            const userCount = await prisma.user.count();
+            tests.userCount = userCount;
+        } catch (e) {
+            tests.database = 'Failed: ' + (e instanceof Error ? e.message : String(e));
+        }
+
+        // Test encryption
+        try {
+            const testEncrypt = encrypt('test');
+            const testDecrypt = decrypt(testEncrypt);
+            tests.encryption = testDecrypt === 'test' ? 'OK' : 'Failed';
+        } catch (e) {
+            tests.encryption = 'Failed: ' + (e instanceof Error ? e.message : String(e));
+        }
+
+        res.json(tests);
+    } catch (error) {
+        console.error('[Test] Error:', error);
+        res.status(500).json({ error: String(error) });
+    }
+});
 
 // Health Check
 app.get('/health', (req, res) => {

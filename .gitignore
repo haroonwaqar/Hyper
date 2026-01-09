@@ -1,6 +1,7 @@
 # Dependencies
 /node_modules
-/.pnp
+backend/node_modules
+backend/TRADING_ENGINE.md
 .pnp.js
 
 # Testing
