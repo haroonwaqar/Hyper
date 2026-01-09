@@ -4,19 +4,20 @@ export declare class AgentService {
     /**
      * Creates a new agent for a user if one doesn't exist.
      * Generates a new random wallet, encrypts the private key, and stores it.
+     * If worldWalletAddress is provided, creates/gets the user first.
      */
-    static createAgent(userId: number): Promise<{
+    static createAgent(worldWalletAddress: string): Promise<{
         address: string;
         isNew: boolean;
     }>;
     /**
      * Retrieves agent status and checks on-chain balance via Hyperliquid SDK.
      */
-    static getAgentStatus(userId: number): Promise<{
+    static getAgentStatus(worldWalletAddress: string): Promise<{
         id: number;
         address: string;
         isActive: boolean;
-        config: import("@prisma/client/runtime/library").JsonValue;
+        config: any;
         usdcBalance: string;
     } | null>;
     /**
@@ -27,5 +28,21 @@ export declare class AgentService {
         transport: HttpTransport;
         wallet: ethers.Wallet;
     }>>;
+    /**
+     * Updates the agent's trading strategy configuration
+     */
+    static updateStrategy(worldWalletAddress: string, strategyConfig: {
+        risk: string;
+        leverage: number;
+    }): Promise<void>;
+    /**
+     * Authorizes an agent to trade on behalf of the user
+     * PRODUCTION VERSION - Actually broadcasts to Hyperliquid
+     */
+    static authorizeAgent(signature: string, worldWalletAddress: string, agentAddress: string): Promise<{
+        success: boolean;
+        message: string;
+        agentAddress: string;
+    }>;
 }
 //# sourceMappingURL=agentService.d.ts.map

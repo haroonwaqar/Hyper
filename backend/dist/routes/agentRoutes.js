@@ -4,12 +4,16 @@ const router = Router();
 // POST /agent/create
 router.post('/create', async (req, res) => {
     try {
-        const { userId } = req.body;
-        if (!userId) {
-            res.status(400).json({ error: 'userId is required' });
+        console.log('[Route] 📝 Create agent request:', req.body);
+        const { worldWalletAddress } = req.body;
+        if (!worldWalletAddress) {
+            console.log('[Route] ❌ Missing worldWalletAddress');
+            res.status(400).json({ error: 'worldWalletAddress is required' });
             return;
         }
-        const result = await AgentService.createAgent(userId);
+        console.log('[Route] 🔄 Calling AgentService.createAgent...');
+        const result = await AgentService.createAgent(worldWalletAddress);
+        console.log('[Route] ✅ Agent created successfully:', result);
         res.json({
             success: true,
             address: result.address,
@@ -17,21 +21,24 @@ router.post('/create', async (req, res) => {
         });
     }
     catch (error) {
-        console.error('Error creating agent:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('[Route] ❌ ERROR creating agent:');
+        console.error('[Route]   Error type:', error instanceof Error ? error.constructor.name : typeof error);
+        console.error('[Route]   Error message:', error instanceof Error ? error.message : String(error));
+        console.error('[Route]   Stack trace:', error instanceof Error ? error.stack : 'No stack');
+        res.status(500).json({
+            error: error instanceof Error ? error.message : 'Internal server error'
+        });
     }
 });
 // GET /agent/status
 router.get('/status', async (req, res) => {
     try {
-        // Assuming userId is passed as a query param for simplicity, 
-        // or you could extract from auth middleware
-        const userId = Number(req.query.userId);
-        if (!userId) {
-            res.status(400).json({ error: 'userId is required' });
+        const worldWalletAddress = req.query.worldWalletAddress;
+        if (!worldWalletAddress) {
+            res.status(400).json({ error: 'worldWalletAddress is required' });
             return;
         }
-        const status = await AgentService.getAgentStatus(userId);
+        const status = await AgentService.getAgentStatus(worldWalletAddress);
         if (!status) {
             res.status(404).json({ error: 'Agent not found' });
             return;
@@ -44,6 +51,49 @@ router.get('/status', async (req, res) => {
     catch (error) {
         console.error('Error fetching agent status:', error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// POST /agent/strategy
+router.post('/strategy', async (req, res) => {
+    try {
+        const { worldWalletAddress, strategyConfig } = req.body;
+        if (!worldWalletAddress || !strategyConfig) {
+            res.status(400).json({ error: 'worldWalletAddress and strategyConfig are required' });
+            return;
+        }
+        await AgentService.updateStrategy(worldWalletAddress, strategyConfig);
+        res.json({
+            success: true,
+            message: 'Strategy updated successfully'
+        });
+    }
+    catch (error) {
+        console.error('Error updating strategy:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// POST /agent/authorize
+router.post('/authorize', async (req, res) => {
+    try {
+        const { signature, worldWalletAddress, agentAddress } = req.body;
+        if (!signature || !worldWalletAddress || !agentAddress) {
+            res.status(400).json({
+                error: 'signature, worldWalletAddress, and agentAddress are required'
+            });
+            return;
+        }
+        const result = await AgentService.authorizeAgent(signature, worldWalletAddress, agentAddress);
+        res.json({
+            success: result.success,
+            message: result.message,
+            agentAddress: result.agentAddress,
+        });
+    }
+    catch (error) {
+        console.error('[Route] ❌ Error authorizing agent:', error);
+        res.status(500).json({
+            error: error instanceof Error ? error.message : 'Internal server error'
+        });
     }
 });
 export default router;

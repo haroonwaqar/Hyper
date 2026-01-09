@@ -1,21 +1,26 @@
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 dotenv.config();
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY; // Must be 32 bytes (256 bits)
+const ENCRYPTION_KEY_RAW = process.env.ENCRYPTION_KEY; // Can be 32 chars or 64 hex chars
 const IV_LENGTH = 16; // AES block size
-if (!ENCRYPTION_KEY) {
+if (!ENCRYPTION_KEY_RAW) {
     throw new Error('ENCRYPTION_KEY is not defined in .env');
 }
-if (ENCRYPTION_KEY.length !== 32) {
-    // Ideally we'd throw here, but for dev we might be lenient or just warn. 
-    // However, for AES-256, it strictly needs 32 bytes if using it directly.
-    // Let's assume the user provides a correct key or we hash it to 32 bytes.
-    // For this boilerplate, we'll assume strict 32 chars.
-    console.warn(`Warning: ENCRYPTION_KEY length is ${ENCRYPTION_KEY.length}, expected 32.`);
+// Support both 32-char raw key and 64-char hex key
+let ENCRYPTION_KEY;
+if (ENCRYPTION_KEY_RAW.length === 64) {
+    // Assume hex-encoded 32-byte key
+    ENCRYPTION_KEY = Buffer.from(ENCRYPTION_KEY_RAW, 'hex');
+}
+else if (ENCRYPTION_KEY_RAW.length === 32) {
+    ENCRYPTION_KEY = Buffer.from(ENCRYPTION_KEY_RAW);
+}
+else {
+    throw new Error(`ENCRYPTION_KEY must be 32 characters or 64 hex characters, got ${ENCRYPTION_KEY_RAW.length}`);
 }
 export function encrypt(text) {
     const iv = crypto.randomBytes(IV_LENGTH);
-    const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+    const cipher = crypto.createCipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
     let encrypted = cipher.update(text);
     encrypted = Buffer.concat([encrypted, cipher.final()]);
     return iv.toString('hex') + ':' + encrypted.toString('hex');
@@ -24,7 +29,7 @@ export function decrypt(text) {
     const textParts = text.split(':');
     const iv = Buffer.from(textParts.shift(), 'hex');
     const encryptedText = Buffer.from(textParts.join(':'), 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+    const decipher = crypto.createDecipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
     let decrypted = decipher.update(encryptedText);
     decrypted = Buffer.concat([decrypted, decipher.final()]);
     return decrypted.toString();
