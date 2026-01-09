@@ -10,43 +10,59 @@ export class AgentService {
      * If worldWalletAddress is provided, creates/gets the user first.
      */
     static async createAgent(worldWalletAddress: string) {
-        // 1. Get or create user
-        const user = await prisma.user.upsert({
-            where: { worldWalletAddress },
-            update: {},
-            create: { worldWalletAddress },
-        });
+        console.log('[AgentService] 🚀 createAgent called for:', worldWalletAddress);
 
-        // 2. Check if agent exists for this user
-        const existingAgent = await prisma.agent.findUnique({
-            where: { userId: user.id },
-        });
+        try {
+            // 1. Get or create user
+            console.log('[AgentService] 📝 Upserting user...');
+            const user = await prisma.user.upsert({
+                where: { worldWalletAddress },
+                update: {},
+                create: { worldWalletAddress },
+            });
+            console.log('[AgentService] ✅ User upserted, ID:', user.id);
 
-        if (existingAgent) {
+            // 2. Check if agent exists for this user
+            console.log('[AgentService] 🔍 Checking for existing agent...');
+            const existingAgent = await prisma.agent.findUnique({
+                where: { userId: user.id },
+            });
+
+            if (existingAgent) {
+                console.log('[AgentService] 📦 Found existing agent:', existingAgent.walletAddress);
+                return {
+                    address: existingAgent.walletAddress,
+                    isNew: false,
+                };
+            }
+
+            // 3. Generate new wallet
+            console.log('[AgentService] 🔐 Generating new wallet...');
+            const wallet = ethers.Wallet.createRandom();
+            const encryptedPrivateKey = encrypt(wallet.privateKey);
+            console.log('[AgentService] ✅ Wallet generated:', wallet.address);
+
+            // 4. Store in DB
+            console.log('[AgentService] 💾 Creating agent in database...');
+            const newAgent = await prisma.agent.create({
+                data: {
+                    userId: user.id,
+                    walletAddress: wallet.address,
+                    encryptedPrivateKey,
+                    strategyConfig: JSON.stringify({ risk: 'Conservative', leverage: 1 }),
+                },
+            });
+            console.log('[AgentService] ✅ Agent created successfully');
+
             return {
-                address: existingAgent.walletAddress,
-                isNew: false,
+                address: newAgent.walletAddress,
+                isNew: true,
             };
+        } catch (error) {
+            console.error('[AgentService] ❌ Error in createAgent:');
+            console.error('[AgentService]   ', error);
+            throw error;
         }
-
-        // 3. Generate new wallet
-        const wallet = ethers.Wallet.createRandom();
-        const encryptedPrivateKey = encrypt(wallet.privateKey);
-
-        // 4. Store in DB
-        const newAgent = await prisma.agent.create({
-            data: {
-                userId: user.id,
-                walletAddress: wallet.address,
-                encryptedPrivateKey,
-                strategyConfig: JSON.stringify({ risk: 'Conservative', leverage: 1 }),
-            },
-        });
-
-        return {
-            address: newAgent.walletAddress,
-            isNew: true,
-        };
     }
 
     /**

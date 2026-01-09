@@ -7,22 +7,33 @@ const router = Router();
 // POST /agent/create
 router.post('/create', async (req: Request, res: Response): Promise<void> => {
     try {
+        console.log('[Route] 📝 Create agent request:', req.body);
         const { worldWalletAddress } = req.body;
 
         if (!worldWalletAddress) {
+            console.log('[Route] ❌ Missing worldWalletAddress');
             res.status(400).json({ error: 'worldWalletAddress is required' });
             return;
         }
 
+        console.log('[Route] 🔄 Calling AgentService.createAgent...');
         const result = await AgentService.createAgent(worldWalletAddress);
+        console.log('[Route] ✅ Agent created successfully:', result);
+
         res.json({
             success: true,
             address: result.address,
             isNew: result.isNew,
         });
     } catch (error) {
-        console.error('Error creating agent:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('[Route] ❌ ERROR creating agent:');
+        console.error('[Route]   Error type:', error instanceof Error ? error.constructor.name : typeof error);
+        console.error('[Route]   Error message:', error instanceof Error ? error.message : String(error));
+        console.error('[Route]   Stack trace:', error instanceof Error ? error.stack : 'No stack');
+
+        res.status(500).json({
+            error: error instanceof Error ? error.message : 'Internal server error'
+        });
     }
 });
 
