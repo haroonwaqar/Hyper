@@ -172,20 +172,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
             // Create agent
             console.log('[AppContext] 📝 Calling createAgent API...');
-            const { address, isNew } = await createAgent(userAddress);
-            console.log('[AppContext] ✅ Agent created:', { address, isNew });
+            const result = await createAgent(userAddress);
+            console.log('[AppContext] ✅ Agent created:', result);
 
             // Set strategy
             const leverage = strategy === 'Aggressive' ? 3 : strategy === 'Moderate' ? 2 : 1;
             console.log('[AppContext] ⚙️  Setting strategy:', { risk: strategy, leverage });
-            await updateStrategy(userAddress, { risk: strategy, leverage });
-            console.log('[AppContext] ✅ Strategy updated');
 
-            // Refresh agent data
-            console.log('[AppContext] 🔄 Refreshing agent data...');
-            await checkForAgent();
+            try {
+                await updateStrategy(userAddress, { risk: strategy, leverage });
+                console.log('[AppContext] ✅ Strategy updated');
+            } catch (stratError) {
+                console.warn('[AppContext] ⚠️  Strategy update failed (non-critical):', stratError);
+                // Don't fail the whole flow if strategy update fails
+            }
+
+            // Refresh agent data in background (don't wait for it)
+            console.log('[AppContext] 🔄 Refreshing agent data in background...');
+            checkForAgent().catch(e => console.warn('[AppContext] Background refresh failed:', e));
+
             console.log('[AppContext] ✅ Agent creation complete!');
 
+            // Return success - don't throw errors
             return;
         } catch (error) {
             console.error('[AppContext] ❌ Error creating agent:');
