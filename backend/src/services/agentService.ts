@@ -13,20 +13,32 @@ export class AgentService {
         console.log('[AgentService] 🚀 createAgent called for:', worldWalletAddress);
 
         try {
-            // 1. Get or create user
+            // 1. CRITICAL: Get or create user FIRST
             console.log('[AgentService] 📝 Upserting user...');
-            const user = await prisma.user.upsert({
-                where: { worldWalletAddress },
-                update: {},
-                create: { worldWalletAddress },
-            });
-            console.log('[AgentService] ✅ User upserted, ID:', user.id);
+            let user;
+            try {
+                user = await prisma.user.upsert({
+                    where: { worldWalletAddress },
+                    update: {},
+                    create: { worldWalletAddress },
+                });
+                console.log('[AgentService] ✅ User upserted, ID:', user.id);
+            } catch (userError) {
+                console.error('[AgentService] ❌ FAILED to upsert user:', userError);
+                throw new Error(`Database error creating user: ${userError instanceof Error ? userError.message : 'Unknown'}`);
+            }
 
             // 2. Check if agent exists for this user
             console.log('[AgentService] 🔍 Checking for existing agent...');
-            const existingAgent = await prisma.agent.findUnique({
-                where: { userId: user.id },
-            });
+            let existingAgent;
+            try {
+                existingAgent = await prisma.agent.findUnique({
+                    where: { userId: user.id },
+                });
+            } catch (findError) {
+                console.error('[AgentService] ❌ Error checking for existing agent:', findError);
+                throw new Error(`Database error checking agent: ${findError instanceof Error ? findError.message : 'Unknown'}`);
+            }
 
             if (existingAgent) {
                 console.log('[AgentService] 📦 Found existing agent:', existingAgent.walletAddress);
@@ -42,26 +54,45 @@ export class AgentService {
             const encryptedPrivateKey = encrypt(wallet.privateKey);
             console.log('[AgentService] ✅ Wallet generated:', wallet.address);
 
-            // 4. Store in DB
+            // 4. Store in DB with comprehensive error handling
             console.log('[AgentService] 💾 Creating agent in database...');
-            const newAgent = await prisma.agent.create({
-                data: {
-                    userId: user.id,
-                    walletAddress: wallet.address,
-                    encryptedPrivateKey,
-                    strategyConfig: JSON.stringify({ risk: 'Conservative', leverage: 1 }),
-                },
-            });
-            console.log('[AgentService] ✅ Agent created successfully');
+            let newAgent;
+            try {
+                newAgent = await prisma.agent.create({
+                    data: {
+                        userId: user.id,
+                        walletAddress: wallet.address,
+                        encryptedPrivateKey,
+                        strategyConfig: JSON.stringify({ risk: 'Conservative', leverage: 1 }),
+                    },
+                });
+                console.log('[AgentService] ✅ Agent created successfully, ID:', newAgent.id);
+            } catch (createError: any) {
+                console.error('[AgentService] ❌ CRITICAL - Failed to create agent in DB');
+                console.error('[AgentService] Error code:', createError.code);
+                console.error('[AgentService] Error message:', createError.message);
+                console.error('[AgentService] Full error:', createError);
+
+                // Provide specific error messages for common Prisma errors
+                if (createError.code === 'P2002') {
+                    throw new Error('Agent already exists for this user (unique constraint)');
+                } else if (createError.code === 'P2003') {
+                    throw new Error('Foreign key constraint failed - user not found');
+                } else {
+                    throw new Error(`Database error: ${createError.message}`);
+                }
+            }
 
             return {
                 address: newAgent.walletAddress,
                 isNew: true,
             };
         } catch (error) {
-            console.error('[AgentService] ❌ Error in createAgent:');
-            console.error('[AgentService]   ', error);
-            throw error;
+            console.error('[AgentService] ❌ createAgent failed with error:');
+            console.error('[AgentService]   Type:', error instanceof Error ? error.constructor.name : typeof error);
+            console.error('[AgentService]   Message:', error instanceof Error ? error.message : String(error));
+            console.error('[AgentService]   Stack:', error instanceof Error ? error.stack : 'No stack');
+            throw error; // Re-throw to be handled by route
         }
     }
 

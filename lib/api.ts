@@ -1,6 +1,16 @@
 // API Client for HyperWorld Backend
 // Base configuration and type definitions
 
+// Strict URL sanitizer - removes trailing slashes and ensures proper path concatenation
+function sanitizeURL(baseUrl: string, endpoint: string): string {
+    // Remove trailing slash from base URL
+    const cleanBase = baseUrl.replace(/\/+$/, '');
+    // Remove leading slash from endpoint
+    const cleanEndpoint = endpoint.replace(/^\/+/, '');
+    // Ensure single slash between them
+    return `${cleanBase}/${cleanEndpoint}`;
+}
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 // Type Definitions
@@ -51,7 +61,8 @@ class APIError extends Error {
 }
 
 async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    const url = `${API_BASE_URL}${endpoint}`;
+    // Use sanitized URL to prevent double slashes
+    const url = sanitizeURL(API_BASE_URL, endpoint);
 
     console.log(`🌐 API Call: ${options?.method || 'GET'} ${url}`);
     console.log('📦 Payload:', options?.body || 'none');
