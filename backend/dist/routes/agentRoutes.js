@@ -25,8 +25,11 @@ router.post('/create', async (req, res) => {
         console.error('[Route]   Error type:', error instanceof Error ? error.constructor.name : typeof error);
         console.error('[Route]   Error message:', error instanceof Error ? error.message : String(error));
         console.error('[Route]   Stack trace:', error instanceof Error ? error.stack : 'No stack');
+        // Return detailed error to frontend for debugging
         res.status(500).json({
-            error: error instanceof Error ? error.message : 'Internal server error'
+            success: false,
+            error: error instanceof Error ? error.message : 'Internal server error',
+            details: error instanceof Error ? error.stack : undefined
         });
     }
 });

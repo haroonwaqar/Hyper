@@ -1,10 +1,32 @@
 import './config.js';
+import { prisma } from './db.js';
+// Verify database connection on startup
+const dbUrl = process.env.TURSO_DATABASE_URL || process.env.DATABASE_URL || 'not configured';
+const maskedUrl = dbUrl.replace(/:[^:]*@/, ':****@'); // Mask credentials
+console.log('🗄️  Database configuration:');
+console.log('   URL:', maskedUrl);
+console.log('   Has auth token:', !!process.env.TURSO_AUTH_TOKEN);
+// Test database connection
+async function testDatabaseConnection() {
+    try {
+        await prisma.$connect();
+        console.log('✅ Successfully connected to Turso database');
+        const userCount = await prisma.user.count();
+        const agentCount = await prisma.agent.count();
+        console.log(`📊 Database stats: ${userCount} users, ${agentCount} agents`);
+    }
+    catch (error) {
+        console.error('❌ CRITICAL: Failed to connect to database!');
+        console.error('   Error:', error);
+        process.exit(1); // Exit if database is not accessible
+    }
+}
+testDatabaseConnection();
 import express from 'express';
 import cors from 'cors';
 import agentRoutes from './routes/agentRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import { Router } from 'express';
-import { prisma } from './db.js';
 import { encrypt, decrypt } from './utils/encryption.js';
 import { TradingEngine } from './services/engine.js';
 const app = express();

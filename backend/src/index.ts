@@ -29,7 +29,6 @@ import cors from 'cors';
 import agentRoutes from './routes/agentRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import { Router } from 'express';
-import { prisma } from './db.js';
 import { encrypt, decrypt } from './utils/encryption.js';
 import { TradingEngine } from './services/engine.js';
 
