@@ -87,15 +87,45 @@ export default function CreateAgentPage() {
 
             // Create agent with selected strategy
             console.log('[CreateAgent] 📞 Calling createUserAgent...');
-            await createUserAgent(selectedStrategy.risk);
-            console.log('[CreateAgent] ✅ Success! Redirecting to dashboard...');
 
-            // Success! Navigate to dashboard
-            router.push('/dashboard?created=true');
+            try {
+                await createUserAgent(selectedStrategy.risk);
+                console.log('[CreateAgent] ✅ Success! Redirecting to dashboard...');
+
+                // Success! Navigate to dashboard
+                router.push('/dashboard?created=true');
+            } catch (innerError) {
+                // Log the detailed error
+                console.error('[CreateAgent] 🔴 createUserAgent failed:', innerError);
+
+                // Show detailed error message
+                if (innerError instanceof Error) {
+                    setError(`Error: ${innerError.message}`);
+                } else {
+                    setError('Unknown error occurred. Please check console logs.');
+                }
+                throw innerError; // Re-throw to be caught by outer catch
+            }
+
         } catch (err) {
-            console.error('[CreateAgent] ❌ Error:', err);
-            const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-            console.error('[CreateAgent] Error message:', errorMessage);
+            console.error('[CreateAgent] ❌ Final error handler:', err);
+
+            // More detailed error message
+            let errorMessage = 'Failed to create agent. ';
+
+            if (err instanceof Error) {
+                errorMessage += err.message;
+
+                // Add helpful context
+                if (err.message.includes('fetch')) {
+                    errorMessage += ' (Network error - check your connection)';
+                } else if (err.message.includes('CORS')) {
+                    errorMessage += ' (Server connection issue)';
+                }
+            } else {
+                errorMessage += 'Unknown error type: ' + String(err);
+            }
+
             setError(errorMessage);
         } finally {
             setIsCreating(false);
