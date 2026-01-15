@@ -53,39 +53,52 @@ export default function DepositPage() {
 
             const amountInWei = BigInt(Math.floor(amountNum * 1_000_000)); // USDC has 6 decimals
 
-            console.log('[Deposit] 📊 Getting LI.FI quote...');
+            console.log('[Deposit] 📊 Getting bridge routes...');
 
-            // Get quote from LI.FI
-            const quoteRequest = {
-                fromChain: 480, // World Chain (must be number)
-                toChain: 42161, // Arbitrum
-                fromToken: WORLD_CHAIN_USDC,
-                toToken: ARBITRUM_USDC,
+            // Get routes from LI.FI (using routes endpoint which is more reliable)
+            const routesRequest = {
+                fromChainId: 480, // World Chain
+                toChainId: 42161, // Arbitrum
+                fromTokenAddress: WORLD_CHAIN_USDC,
+                toTokenAddress: ARBITRUM_USDC,
                 fromAmount: amountInWei.toString(),
                 fromAddress: agent.address,
                 toAddress: agent.address,
-                slippage: 0.03, // 3% slippage
+                options: {
+                    slippage: 0.03,  // 3%
+                    order: 'CHEAPEST',
+                },
             };
 
-            console.log('[Deposit] Quote request:', JSON.stringify(quoteRequest, null, 2));
+            console.log('[Deposit] Routes request:', JSON.stringify(routesRequest, null, 2));
 
-            const quoteResponse = await fetch('https://li.quest/v1/quote', {
+            const routesResponse = await fetch('https://li.quest/v1/advanced/routes', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(quoteRequest),
+                body: JSON.stringify(routesRequest),
             });
 
-            console.log('[Deposit] Quote response status:', quoteResponse.status);
+            console.log('[Deposit] Routes response status:', routesResponse.status);
 
-            const quoteText = await quoteResponse.text();
-            console.log('[Deposit] Quote response:', quoteText);
+            const routesText = await routesResponse.text();
+            console.log('[Deposit] Routes response:', routesText.substring(0, 500));
 
-            if (!quoteResponse.ok) {
-                throw new Error(`Failed to get bridge quote: ${quoteResponse.status} - ${quoteText}`);
+            if (!routesResponse.ok) {
+                throw new Error(`Failed to get bridge routes: ${routesResponse.status} - ${routesText}`);
             }
 
-            const quote = JSON.parse(quoteText);
-            console.log('[Deposit] ✅ Quote received successfully');
+            const routesData = JSON.parse(routesText);
+
+            if (!routesData.routes || routesData.routes.length === 0) {
+                throw new Error('No bridge routes available for World Chain → Arbitrum');
+            }
+
+            // Get the best route (first one)
+            const route = routesData.routes[0];
+            console.log('[Deposit] ✅ Route found:', route.steps[0].tool);
+
+            // Extract transaction request from the first step
+            const quote = route.steps[0];
 
             // Approve USDC spending for LI.FI Diamond contract
             console.log('[Deposit] 📝 Requesting approval signature...');
