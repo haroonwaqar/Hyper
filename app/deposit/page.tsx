@@ -56,26 +56,36 @@ export default function DepositPage() {
             console.log('[Deposit] 📊 Getting LI.FI quote...');
 
             // Get quote from LI.FI
+            const quoteRequest = {
+                fromChain: 480, // World Chain (must be number)
+                toChain: 42161, // Arbitrum
+                fromToken: WORLD_CHAIN_USDC,
+                toToken: ARBITRUM_USDC,
+                fromAmount: amountInWei.toString(),
+                fromAddress: agent.address,
+                toAddress: agent.address,
+                slippage: 0.03, // 3% slippage
+            };
+
+            console.log('[Deposit] Quote request:', JSON.stringify(quoteRequest, null, 2));
+
             const quoteResponse = await fetch('https://li.quest/v1/quote', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    fromChain: '480', // World Chain
-                    toChain: '42161', // Arbitrum
-                    fromToken: WORLD_CHAIN_USDC,
-                    toToken: ARBITRUM_USDC,
-                    fromAmount: amountInWei.toString(),
-                    fromAddress: agent.address,
-                    toAddress: agent.address,
-                }),
+                body: JSON.stringify(quoteRequest),
             });
 
+            console.log('[Deposit] Quote response status:', quoteResponse.status);
+
+            const quoteText = await quoteResponse.text();
+            console.log('[Deposit] Quote response:', quoteText);
+
             if (!quoteResponse.ok) {
-                throw new Error('Failed to get bridge quote');
+                throw new Error(`Failed to get bridge quote: ${quoteResponse.status} - ${quoteText}`);
             }
 
-            const quote = await quoteResponse.json();
-            console.log('[Deposit] ✅ Quote received');
+            const quote = JSON.parse(quoteText);
+            console.log('[Deposit] ✅ Quote received successfully');
 
             // Approve USDC spending for LI.FI Diamond contract
             console.log('[Deposit] 📝 Requesting approval signature...');
