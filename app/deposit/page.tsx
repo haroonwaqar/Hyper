@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useApp } from '../context/AppContext';
-import { MiniKit, type MiniAppSendTransactionPayload, ResponseEvent } from '@worldcoin/minikit-js';
+import { MiniKit, type MiniAppSendTransactionPayload } from '@worldcoin/minikit-js';
 
 export default function DepositPage() {
     const [amount, setAmount] = useState('10');
@@ -43,142 +43,121 @@ export default function DepositPage() {
                 throw new Error('Insufficient USDC balance');
             }
 
-            console.log(`[Deposit] 💰 Amount: ${amountNum} USDC`);
-            console.log(`[Deposit] 📍 Source: World Chain (480) → Destination: Arbitrum (42161)`);
-            console.log(`[Deposit] 🏦 Agent Address: ${agent.address}`);
+            console.log(`[Deposit] 💰 Amount: $${amountNum} USDC`);
+            console.log(`[Deposit] 🏦 Sending to agent: ${agent.address}`);
 
-            // STEP 1: Check for ETH gas on World Chain
-            console.log('[Deposit] ⛽ Checking gas balance...');
-            // Note: In production, use MiniKit to check ETH balance
-            // For now, we'll proceed but warn the user
+            // Contract addresses
+            const WORLD_CHAIN_USDC = '0x79A02482A880bCE3F13e09Da970dC34db4CD24d1';
+            const LIFI_DIAMOND = '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE';
+            const ARBITRUM_USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 
-            // TODO: Implement gas check via MiniKit
-            // const ethBalance = await checkGasBalance();
-            // if (ethBalance < 0.001) {
-            //     throw new Error('Insufficient Gas (ETH) for Bridge Fee. Please add ETH to your World App wallet.');
-            // }
+            const amountInWei = BigInt(Math.floor(amountNum * 1_000_000)); // USDC has 6 decimals
 
-            console.log('[Deposit] ✅ Gas check passed (simulated)');
+            console.log('[Deposit] 📊 Getting LI.FI quote...');
 
-            // STEP 2: Request bridge quote
-            console.log('[Deposit] 📊 Requesting bridge quote from LI.FI...');
+            // Get quote from LI.FI
+            const quoteResponse = await fetch('https://li.quest/v1/quote', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    fromChain: '480', // World Chain
+                    toChain: '42161', // Arbitrum
+                    fromToken: WORLD_CHAIN_USDC,
+                    toToken: ARBITRUM_USDC,
+                    fromAmount: amountInWei.toString(),
+                    fromAddress: agent.address,
+                    toAddress: agent.address,
+                }),
+            });
 
-            // Note: This is where you'd call LI.FI API or Across Protocol
-            // const quote = await fetch('https://li.quest/v1/quote', {
-            //     method: 'POST',
-            //     body: JSON.stringify({
-            //         fromChain: 480,  // World Chain
-            //         toChain: 42161,  // Arbitrum
-            //         fromToken: 'USDC',
-            //         toToken: 'USDC',
-            //         fromAmount: (amountNum * 1e6).toString(), // USDC has 6 decimals
-            //         fromAddress: userWalletAddress,
-            //         toAddress: agent.address,
-            //     })
-            // });
+            if (!quoteResponse.ok) {
+                throw new Error('Failed to get bridge quote');
+            }
 
-            console.log('[Deposit] ✅ Quote received (simulated)');
+            const quote = await quoteResponse.json();
+            console.log('[Deposit] ✅ Quote received');
 
-            // STEP 3: Check USDC allowance for bridge contract
-            console.log('[Deposit] 🔍 Checking USDC allowance...');
+            // Approve USDC spending for LI.FI Diamond contract
+            console.log('[Deposit] 📝 Requesting approval signature...');
 
-            // Note: Check if approval is needed
-            // const bridgeContract = '0x...'; // LI.FI or Across bridge contract
-            // const usdcContract = '0x...'; // USDC on World Chain
-            // const allowance = await checkAllowance(usdcContract, bridgeContract);
+            const approvePayload = {
+                transaction: [{
+                    address: WORLD_CHAIN_USDC,
+                    abi: [
+                        {
+                            name: 'approve',
+                            type: 'function',
+                            stateMutability: 'nonpayable',
+                            inputs: [
+                                { name: 'spender', type: 'address' },
+                                { name: 'amount', type: 'uint256' }
+                            ],
+                            outputs: [{ name: '', type: 'bool' }]
+                        }
+                    ],
+                    functionName: 'approve',
+                    args: [LIFI_DIAMOND, amountInWei.toString()],
+                }],
+            };
 
-            // if (allowance < amountNum) {
-            //     console.log('[Deposit] 📝 Approval needed, requesting signature...');
-            //     
-            //     const approvePayload: MiniAppSendTransactionPayload = {
-            //         transaction: [{
-            //             address: usdcContract,
-            //             abi: [
-            //                 {
-            //                     name: 'approve',
-            //                     type: 'function',
-            //                     inputs: [
-            //                         { name: 'spender', type: 'address' },
-            //                         { name: 'amount', type: 'uint256' }
-            //                     ],
-            //                     outputs: [{ name: '', type: 'bool' }]
-            //                 }
-            //             ],
-            //             functionName: 'approve',
-            //             args: [bridgeContract, (amountNum * 1e6).toString()],
-            //         }],
-            //     };
-            //     
-            //     const approvalResult = await MiniKit.commands.sendTransaction(approvePayload);
-            //     
-            //     if (approvalResult.finalPayload?.status === 'error') {
-            //         throw new Error('Approval transaction failed');
-            //     }
-            //     
-            //     if (!approvalResult.finalPayload?.transactionId) {
-            //         throw new Error('Transaction Cancelled - Approval not signed');
-            //     }
-            //     
-            //     console.log('[Deposit] ✅ Approval tx:', approvalResult.finalPayload.transactionId);
-            //     
-            //     // Wait for approval confirmation
-            //     await new Promise(resolve => setTimeout(resolve, 3000));
-            // }
+            const approvalResult = await MiniKit.commandsAsync.sendTransaction(approvePayload);
 
-            console.log('[Deposit] ✅ USDC allowance sufficient (simulated)');
+            if (!approvalResult.finalPayload) {
+                throw new Error('Transaction cancelled by user');
+            }
 
-            // STEP 4: Execute bridge transaction
-            console.log('[Deposit] 🌉 Requesting bridge transaction signature...');
+            if (approvalResult.finalPayload.status === 'error') {
+                throw new Error('Approval transaction failed');
+            }
 
-            // Note: This is where you'd trigger the actual bridge via MiniKit
-            // const bridgePayload: MiniAppSendTransactionPayload = {
-            //     transaction: [{
-            //         address: bridgeContract,
-            //         abi: [...], // Bridge contract ABI
-            //         functionName: 'bridge',
-            //         args: [
-            //             42161, // destinationChainId
-            //             agent.address, // recipient
-            //             usdcAddress, // token
-            //             (amountNum * 1e6).toString(), // amount
-            //         ],
-            //     }],
-            // };
+            const approvalTxId = approvalResult.finalPayload.transaction_id;
+            if (!approvalTxId) {
+                throw new Error('No approval transaction ID received');
+            }
 
-            // const txResult = await MiniKit.commands.sendTransaction(bridgePayload);
+            console.log('[Deposit] ✅ Approval tx:', approvalTxId);
 
-            // // CRITICAL: Check for actual transaction hash
-            // if (!txResult.finalPayload) {
-            //     throw new Error('Transaction Cancelled - No wallet response');
-            // }
+            // Wait for approval confirmation
+            console.log('[Deposit] ⏳ Waiting for approval...');
+            await new Promise(resolve => setTimeout(resolve, 3000));
 
-            // if (txResult.finalPayload.status === 'error') {
-            //     throw new Error('Transaction Failed: ' + (txResult.finalPayload.error || 'Unknown error'));
-            // }
+            // Execute bridge transaction using LI.FI
+            console.log('[Deposit] 🌉 Requesting bridge transaction...');
 
-            // const txHash = txResult.finalPayload.transactionId;
-            // if (!txHash) {
-            //     throw new Error('Transaction Cancelled - User closed wallet popup');
-            // }
+            const bridgePayload = {
+                transactions: quote.transactionRequest ? [{
+                    address: quote.transactionRequest.to,
+                    abi: [],
+                    value: quote.transactionRequest.value || '0',
+                    calldata: quote.transactionRequest.data,
+                }] : [],
+            };
 
-            // console.log('[Deposit] ✅ Tx Hash Received:', txHash);
-            // console.log(`[Deposit] 🔗 View on Explorer: https://worldscan.org/tx/${txHash}`);
+            const bridgeResult = await MiniKit.commandsAsync.sendTransaction(bridgePayload);
 
-            // TEMPORARY: Simulate transaction for MVP
-            console.warn('[Deposit] ⚠️  USING SIMULATED TRANSACTION - IMPLEMENT REAL BRIDGE!');
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            const simulatedTxHash = `0x${Math.random().toString(16).substring(2)}`;
-            console.log('[Deposit] 🎭 Simulated Tx Hash:', simulatedTxHash);
+            if (!bridgeResult.finalPayload) {
+                throw new Error('Bridge transaction cancelled by user');
+            }
 
-            // Only show success if we have a transaction hash
-            console.log('[Deposit] ✅ Bridge transaction confirmed!');
+            if (bridgeResult.finalPayload.status === 'error') {
+                throw new Error('Bridge transaction failed');
+            }
+
+            const bridgeTxId = bridgeResult.finalPayload.transaction_id;
+            if (!bridgeTxId) {
+                throw new Error('No bridge transaction ID received');
+            }
+
+            console.log('[Deposit] ✅ Bridge tx:', bridgeTxId);
+            console.log('[Deposit] 🎉 Transaction confirmed!');
+
             setStatus('complete');
 
-            // Refresh balances after successful transaction
+            // Refresh balances
             setTimeout(() => {
                 console.log('[Deposit] 🔄 Refreshing balances...');
                 refreshBalances();
-            }, 1000);
+            }, 2000);
 
         } catch (err) {
             console.error('[Deposit] ❌ Error:', err);
