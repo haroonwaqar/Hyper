@@ -97,6 +97,100 @@ export class AgentService {
     }
 
     /**
+     * Stops an agent by closing all positions and marking as inactive
+     */
+    static async stopAgent(worldWalletAddress: string) {
+        console.log('[AgentService] 🛑 stopAgent called for:', worldWalletAddress);
+
+        try {
+            // 1. Get user and agent
+            const user = await prisma.user.findUnique({
+                where: { worldWalletAddress },
+            });
+
+            if (!user) {
+                throw new Error('User not found');
+            }
+
+            const agent = await prisma.agent.findUnique({
+                where: { userId: user.id },
+            });
+
+            if (!agent) {
+                throw new Error('Agent not found');
+            }
+
+            console.log('[AgentService] 📊 Agent found:', agent.walletAddress);
+
+            // 2. Decrypt private key and create client
+            const privateKey = decrypt(agent.encryptedPrivateKey);
+            const wallet = new ethers.Wallet(privateKey);
+
+            const transport = new HttpTransport();
+            const exchangeClient = new ExchangeClient({ transport, wallet });
+            const infoClient = new InfoClient({ transport });
+
+            // 3. Get open positions
+            console.log('[AgentService] 🔍 Fetching open positions...');
+            const positions = await infoClient.clearinghouseState({
+                user: agent.walletAddress,
+            });
+
+            const openPositions = positions.assetPositions?.filter(
+                (p: any) => parseFloat(p.position.szi) !== 0
+            ) || [];
+
+            console.log('[AgentService] 📦 Found', openPositions.length, 'open positions');
+
+            // 4. Close all positions
+            let positionsClosed = 0;
+            for (const pos of openPositions) {
+                try {
+                    const size = Math.abs(parseFloat(pos.position.szi));
+                    const isBuy = parseFloat(pos.position.szi) < 0; // Close long = sell, close short = buy
+
+                    console.log(`[AgentService] ⚡ Closing ${pos.position.coin}: ${size} (${isBuy ? 'BUY' : 'SELL'})`);
+
+                    await exchangeClient.order({
+                        orders: [{
+                            a: pos.position.coin === 'ETH' ? 0 : 1, // Simplified: 0=ETH
+                            b: isBuy,
+                            p: '0', // Market order
+                            s: size.toString(),
+                            r: true, // reduce_only = true (closing position)
+                            t: { limit: { tif: 'Ioc' } },
+                        }],
+                        grouping: 'na',
+                    });
+
+                    positionsClosed++;
+                    console.log(`[AgentService] ✅ Closed ${pos.position.coin}`);
+                } catch (closeError) {
+                    console.error(`[AgentService] ⚠️  Failed to close ${pos.position.coin}:`, closeError);
+                    // Continue closing other positions
+                }
+            }
+
+            // 5. Mark agent as inactive
+            await prisma.agent.update({
+                where: { id: agent.id },
+                data: { isActive: false },
+            });
+
+            console.log('[AgentService] ✅ Agent stopped successfully');
+
+            return {
+                status: 'stopped',
+                positionsClosed,
+                totalPositions: openPositions.length,
+            };
+        } catch (error) {
+            console.error('[AgentService] ❌ stopAgent failed:', error);
+            throw error;
+        }
+    }
+
+    /**
      * Retrieves agent status and checks on-chain balance via Hyperliquid SDK.
      */
     static async getAgentStatus(worldWalletAddress: string) {

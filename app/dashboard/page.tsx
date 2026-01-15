@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useApp } from '../context/AppContext';
+import AgentSettings from '../components/AgentSettings';
 
 interface Portfolio {
     accountValue: number;
@@ -33,6 +34,7 @@ export default function DashboardPage() {
     const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
     const [portfolioLoading, setPortfolioLoading] = useState(false);
     const [priceData, setPriceData] = useState<any[]>([]);
+    const [showSettings, setShowSettings] = useState(false);
 
     // Fetch portfolio data
     useEffect(() => {
@@ -206,9 +208,12 @@ export default function DashboardPage() {
                             </div>
 
                             <div className="grid grid-cols-2 gap-3">
-                                <Link href="/agent/configure" className="btn btn-secondary">
-                                    Configure
-                                </Link>
+                                <button
+                                    onClick={() => setShowSettings(true)}
+                                    className="btn btn-secondary"
+                                >
+                                    ⚙️ Configure
+                                </button>
                                 <Link href="/deposit" className="btn btn-primary">
                                     Add Funds
                                 </Link>
@@ -313,6 +318,10 @@ export default function DashboardPage() {
                     <span>Profile</span>
                 </Link>
             </nav>
+
+            {/* Agent Settings Modal */}
+            {showSettings && hasAgent && (<AgentSettings onClose={() => setShowSettings(false)} />
+            )}
         </div>
     );
 }

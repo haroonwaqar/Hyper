@@ -19,7 +19,9 @@ export declare class TradingEngine {
      */
     private executeLoop;
     /**
-     * Get current funding rate for a coin
+     * Get the current funding rate for a given coin
+     * Uses multiple methods with fallbacks for resilience
+     * Returns 0 (neutral) if all methods fail to prevent engine crashes
      */
     private getFundingRate;
     /**
@@ -30,6 +32,14 @@ export declare class TradingEngine {
      * Execute strategy for a single agent
      */
     private executeAgentStrategy;
+    /**
+     * Execute conservative strategy (funding rate arbitrage)
+     */
+    private executeConservativeStrategy;
+    /**
+     * Execute aggressive strategy (momentum-based trading)
+     */
+    private executeAggressiveStrategy;
     /**
      * Get engine status
      */

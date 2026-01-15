@@ -11,6 +11,14 @@ export declare class AgentService {
         isNew: boolean;
     }>;
     /**
+     * Stops an agent by closing all positions and marking as inactive
+     */
+    static stopAgent(worldWalletAddress: string): Promise<{
+        status: string;
+        positionsClosed: number;
+        totalPositions: number;
+    }>;
+    /**
      * Retrieves agent status and checks on-chain balance via Hyperliquid SDK.
      */
     static getAgentStatus(worldWalletAddress: string): Promise<{

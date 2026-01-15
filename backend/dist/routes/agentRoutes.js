@@ -56,7 +56,31 @@ router.get('/status', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// POST /agent/strategy
+// POST /agent/stop - Stop agent and close positions
+router.post('/stop', async (req, res) => {
+    try {
+        console.log('[Route] 🛑 Stop agent request:', req.body);
+        const { worldWalletAddress } = req.body;
+        if (!worldWalletAddress) {
+            res.status(400).json({ error: 'worldWalletAddress is required' });
+            return;
+        }
+        const result = await AgentService.stopAgent(worldWalletAddress);
+        console.log('[Route] ✅ Agent stopped:', result);
+        res.json({
+            success: true,
+            ...result,
+        });
+    }
+    catch (error) {
+        console.error('[Route] ❌ Error stopping agent:', error);
+        res.status(500).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Failed to stop agent'
+        });
+    }
+});
+// POST /agent/strategy - Update agent strategy
 router.post('/strategy', async (req, res) => {
     try {
         const { worldWalletAddress, strategyConfig } = req.body;

@@ -65,11 +65,6 @@ export class TradingEngine {
             // Step A: Market Check - Get funding rate
             const fundingRate = await this.getFundingRate('ETH');
 
-            if (!fundingRate) {
-                console.log('[Engine] ⚠️  Could not fetch funding rate, skipping cycle');
-                return;
-            }
-
             console.log(`[Engine] 📈 Current ETH funding rate: ${(fundingRate * 100).toFixed(4)}%`);
 
             // Check if funding is above threshold (positive = shorts get paid)
@@ -104,39 +99,65 @@ export class TradingEngine {
     }
 
     /**
-     * Get current funding rate for a coin
+     * Get the current funding rate for a given coin
+     * Uses multiple methods with fallbacks for resilience
+     * Returns 0 (neutral) if all methods fail to prevent engine crashes
      */
-    private async getFundingRate(coin: string): Promise<number | null> {
+    private async getFundingRate(coin: string): Promise<number> {
         try {
-            const meta = await this.infoClient.meta();
-            const universe = meta.universe;
+            console.log(`[Engine] 🔍 Fetching funding rate for ${coin}...`);
 
-            // Find the coin in the universe
-            const coinInfo = universe.find((u: any) => u.name === coin);
+            // Method 1: Try metaAndAssetCtxs (most reliable for current funding)
+            try {
+                const metaAndAssetCtxs = await this.infoClient.metaAndAssetCtxs();
+                console.log('[Engine] 📊 Raw meta response received');
 
-            if (!coinInfo) {
-                console.log(`[Engine] ⚠️  Coin ${coin} not found in universe`);
-                return null;
+                // Find the coin asset in the universe
+                const universe = metaAndAssetCtxs[0]?.universe;
+                if (universe) {
+                    const asset = universe.find((u: any) => u.name === coin);
+                    if (asset && 'funding' in asset) {
+                        const fundingRate = parseFloat((asset as any).funding || '0');
+                        console.log(`[Engine] ✅ Funding rate from meta: ${(fundingRate * 100).toFixed(4)}%`);
+                        return fundingRate;
+                    }
+                }
+                console.log('[Engine] ⚠️  No funding rate in meta response');
+            } catch (metaError) {
+                console.warn('[Engine] ⚠️  metaAndAssetCtxs failed:', metaError);
             }
 
-            // Get funding info
-            const fundingInfo = await this.infoClient.fundingHistory({
-                coin,
-                startTime: Date.now() - 3600000, // Last hour
-            });
+            // Method 2: Try fundingHistory as fallback
+            try {
+                const history = await this.infoClient.fundingHistory({
+                    coin: coin,
+                    startTime: Date.now() - (24 * 60 * 60 * 1000), // Last 24 hours
+                });
 
-            if (!fundingInfo || fundingInfo.length === 0) {
-                return null;
+                console.log('[Engine] 📊 Raw funding history length:', history?.length || 0);
+
+                if (Array.isArray(history) && history.length > 0) {
+                    // Get the most recent funding rate
+                    const latestFunding = history[history.length - 1];
+                    if (latestFunding && 'fundingRate' in latestFunding) {
+                        const fundingRate = parseFloat(latestFunding.fundingRate);
+                        console.log(`[Engine] ✅ Funding rate from history: ${(fundingRate * 100).toFixed(4)}%`);
+                        return fundingRate;
+                    }
+                }
+                console.log('[Engine] ⚠️  No funding history available');
+            } catch (historyError) {
+                console.warn('[Engine] ⚠️  fundingHistory failed:', historyError);
             }
 
-            // Get the most recent funding rate
-            const latestFunding = fundingInfo[fundingInfo.length - 1];
-            if (!latestFunding) return null;
-            return parseFloat(latestFunding.fundingRate);
+            // If all methods fail, return 0 (neutral) with warning
+            console.warn(`[Engine] ⚠️  Could not fetch funding rate for ${coin}, returning 0 (neutral)`);
+            return 0;
 
         } catch (error) {
-            console.error('[Engine] ❌ Error fetching funding rate:', error);
-            return null;
+            console.error(`[Engine] ❌ Critical error fetching funding rate:`, error);
+            // Return 0 instead of null to prevent engine crashes
+            return 0;
         }
     }
 
@@ -179,6 +200,13 @@ export class TradingEngine {
         try {
             console.log(`[Engine] 🤖 Processing agent ${agent.id} (${agent.walletAddress})`);
 
+            // Parse strategy config
+            const config = JSON.parse(agent.strategyConfig);
+            const strategy = config.risk || 'Conservative';
+            const leverage = config.leverage || 1;
+
+            console.log(`[Engine] 📋 Strategy: ${strategy}, Leverage: ${leverage}x`);
+
             // Decrypt private key
             const privateKey = decrypt(agent.encryptedPrivateKey);
             const wallet = new ethers.Wallet(privateKey);
@@ -216,34 +244,131 @@ export class TradingEngine {
                 return;
             }
 
-            // Execute short position (1x leverage for safety)
-            console.log(`[Engine] 📉 Executing SHORT order for agent...`);
-
-            // Calculate position size (use 90% of balance for safety)
-            const positionSize = (balance * 0.9).toFixed(2);
-
-            // Place market order to exchange client
-            const order = await exchangeClient.order({
-                orders: [
-                    {
-                        a: 0, // Asset index for ETH
-                        b: false, // is_buy = false (SHORT)
-                        p: '0', // Price (0 for market)
-                        s: positionSize, // Size
-                        r: false, // reduce_only
-                        t: { limit: { tif: 'Ioc' } }, // Immediate or Cancel
-                    }
-                ],
-                grouping: 'na',
-            });
-
-            console.log(`[Engine] ✅ Order executed:`, order);
-            console.log(`[Engine] 📊 Expected funding yield: ${(fundingRate * 100).toFixed(4)}% per 8 hours`);
+            // Execute strategy based on type
+            if (strategy === 'Aggressive') {
+                await this.executeAggressiveStrategy(exchangeClient, balance, leverage);
+            } else {
+                // Conservative/Safe strategy - funding rate arbitrage
+                await this.executeConservativeStrategy(exchangeClient, balance, fundingRate, leverage);
+            }
 
         } catch (error) {
             console.error(`[Engine] ❌ Error executing strategy for agent ${agent.id}:`, error);
             // Continue to next agent even if this one fails
         }
+    }
+
+    /**
+     * Execute conservative strategy (funding rate arbitrage)
+     */
+    private async executeConservativeStrategy(
+        exchangeClient: ExchangeClient,
+        balance: number,
+        fundingRate: number,
+        leverage: number
+    ) {
+        console.log(`[Engine] 📉 Executing CONSERVATIVE strategy (funding arbitrage)...`);
+
+        // Calculate position size (use 90% of balance for safety)
+        const positionSize = (balance * 0.9).toFixed(2);
+
+        // Place market SHORT order (to receive funding)
+        const order = await exchangeClient.order({
+            orders: [
+                {
+                    a: 0, // Asset index for ETH
+                    b: false, // is_buy = false (SHORT)
+                    p: '0', // Price (0 for market)
+                    s: positionSize, // Size
+                    r: false, // reduce_only
+                    t: { limit: { tif: 'Ioc' } }, // Immediate or Cancel
+                }
+            ],
+            grouping: 'na',
+        });
+
+        console.log(`[Engine] ✅ Conservative order executed:`, order);
+        console.log(`[Engine] 📊 Expected funding yield: ${(fundingRate * 100).toFixed(4)}% per 8 hours`);
+    }
+
+    /**
+     * Execute aggressive strategy (momentum-based trading)
+     */
+    private async executeAggressiveStrategy(
+        exchangeClient: ExchangeClient,
+        balance: number,
+        leverage: number
+    ) {
+        console.log(`[Engine] ⚡ Executing AGGRESSIVE strategy (momentum trading)...`);
+
+        // 1. Get recent candles for momentum calculation
+        const candles = await this.infoClient.candleSnapshot({
+            coin: 'ETH',
+            interval: '15m',
+            startTime: Date.now() - (4 * 60 * 60 * 1000), // Last 4 hours
+        });
+
+        if (candles.length < 2) {
+            console.log(`[Engine] ⚠️  Not enough data for momentum calculation`);
+            return;
+        }
+
+        // 2. Calculate price momentum (% change from 2 candles ago)
+        const currentCandle = candles[candles.length - 1];
+        if (!currentCandle) {
+            console.log(`[Engine] ⚠️  No current candle data`);
+            return;
+        }
+
+        const currentPrice = parseFloat(currentCandle.c);
+        const previousCandle = candles[candles.length - 3] || candles[candles.length - 2];
+        if (!previousCandle) {
+            console.log(`[Engine] ⚠️  No previous candle data`);
+            return;
+        }
+
+        const previousPrice = parseFloat(previousCandle.c);
+        const momentum = ((currentPrice - previousPrice) / previousPrice) * 100;
+
+        console.log(`[Engine] 📈 Price momentum: ${momentum.toFixed(2)}%`);
+
+        // 3. Determine direction based on momentum
+        let direction: 'LONG' | 'SHORT' | null = null;
+
+        if (momentum > 0.5) {
+            direction = 'LONG';
+            console.log(`[Engine] 🚀 Strong upward momentum - going LONG`);
+        } else if (momentum < -0.5) {
+            direction = 'SHORT';
+            console.log(`[Engine] 📉 Strong downward momentum - going SHORT`);
+        } else {
+            console.log(`[Engine] ⏭️  Momentum too weak (${momentum.toFixed(2)}%), skipping`);
+            return;
+        }
+
+        // 4. Calculate position size with leverage
+        const baseSize = balance * 0.9;
+        const positionSize = (baseSize * leverage).toFixed(2);
+
+        console.log(`[Engine] 💰 Position size: $${positionSize} (${leverage}x leverage)`);
+
+        // 5. Place market order
+        const order = await exchangeClient.order({
+            orders: [
+                {
+                    a: 0, // ETH
+                    b: direction === 'LONG', // is_buy
+                    p: '0', // Market order
+                    s: positionSize,
+                    r: false, // not reduce_only
+                    t: { limit: { tif: 'Ioc' } },
+                }
+            ],
+            grouping: 'na',
+        });
+
+        console.log(`[Engine] ✅ Aggressive ${direction} order executed:`, order);
+        console.log(`[Engine] 📊 Expected return: >${Math.abs(momentum).toFixed(2)}% with ${leverage}x leverage`);
     }
 
     /**
