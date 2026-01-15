@@ -4,12 +4,13 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useApp } from '../context/AppContext';
-import { MiniKit, type MiniAppSendTransactionPayload } from '@worldcoin/minikit-js';
+import { MiniKit } from '@worldcoin/minikit-js';
 
 export default function DepositPage() {
     const [amount, setAmount] = useState('10');
     const [status, setStatus] = useState<'idle' | 'confirming' | 'complete' | 'error'>('idle');
     const [error, setError] = useState<string | null>(null);
+    const [txHash, setTxHash] = useState<string | null>(null);
     const router = useRouter();
     const { worldChainBalance, agent, hasAgent, refreshBalances } = useApp();
 
@@ -29,10 +30,15 @@ export default function DepositPage() {
 
     const handleDeposit = async () => {
         try {
-            console.log('[Deposit] 🚀 Starting deposit flow...');
+            console.log('[Deposit] 🚀 Starting simple USDC transfer...');
+            console.log('[Deposit] Amount:', amount, 'USDC');
+            console.log('[Deposit] Agent Address:', agent.address);
+
             setStatus('confirming');
             setError(null);
+            setTxHash(null);
 
+            // Validate amount
             const amountNum = parseFloat(amount);
             if (isNaN(amountNum) || amountNum <= 0) {
                 throw new Error('Invalid amount');
@@ -43,148 +49,79 @@ export default function DepositPage() {
                 throw new Error('Insufficient USDC balance');
             }
 
-            console.log(`[Deposit] 💰 Amount: $${amountNum} USDC`);
-            console.log(`[Deposit] 🏦 Sending to agent: ${agent.address}`);
+            // Check MiniKit
+            if (!MiniKit.isInstalled()) {
+                throw new Error('World App not detected. Please open this in World App.');
+            }
 
-            // Contract addresses
+            console.log('[Deposit] ✅ MiniKit detected');
+
+            // World Chain USDC Contract
             const WORLD_CHAIN_USDC = '0x79A02482A880bCE3F13e09Da970dC34db4CD24d1';
-            const LIFI_DIAMOND = '0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE';
-            const ARBITRUM_USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 
-            const amountInWei = BigInt(Math.floor(amountNum * 1_000_000)); // USDC has 6 decimals
+            // Convert amount to USDC format (6 decimals)
+            const amountInWei = Math.floor(amountNum * 1_000_000).toString();
+            console.log('[Deposit] Amount in wei (6 decimals):', amountInWei);
 
-            console.log('[Deposit] 📊 Getting bridge routes...');
-
-            // Get routes from LI.FI (using routes endpoint which is more reliable)
-            const routesRequest = {
-                fromChainId: 480, // World Chain
-                toChainId: 42161, // Arbitrum
-                fromTokenAddress: WORLD_CHAIN_USDC,
-                toTokenAddress: ARBITRUM_USDC,
-                fromAmount: amountInWei.toString(),
-                fromAddress: agent.address,
-                toAddress: agent.address,
-                options: {
-                    slippage: 0.03,  // 3%
-                    order: 'CHEAPEST',
-                },
-            };
-
-            console.log('[Deposit] Routes request:', JSON.stringify(routesRequest, null, 2));
-
-            const routesResponse = await fetch('https://li.quest/v1/advanced/routes', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(routesRequest),
-            });
-
-            console.log('[Deposit] Routes response status:', routesResponse.status);
-
-            const routesText = await routesResponse.text();
-            console.log('[Deposit] Routes response:', routesText.substring(0, 500));
-
-            if (!routesResponse.ok) {
-                throw new Error(`Failed to get bridge routes: ${routesResponse.status} - ${routesText}`);
-            }
-
-            const routesData = JSON.parse(routesText);
-
-            if (!routesData.routes || routesData.routes.length === 0) {
-                throw new Error('No bridge routes available for World Chain → Arbitrum');
-            }
-
-            // Get the best route (first one)
-            const route = routesData.routes[0];
-            console.log('[Deposit] ✅ Route found:', route.steps[0].tool);
-
-            // Extract transaction request from the first step
-            const quote = route.steps[0];
-
-            // Approve USDC spending for LI.FI Diamond contract
-            console.log('[Deposit] 📝 Requesting approval signature...');
-
-            const approvePayload = {
+            // Create transaction payload for simple USDC transfer
+            const payload = {
                 transaction: [{
                     address: WORLD_CHAIN_USDC,
                     abi: [
                         {
-                            name: 'approve',
+                            name: 'transfer',
                             type: 'function',
                             stateMutability: 'nonpayable',
                             inputs: [
-                                { name: 'spender', type: 'address' },
-                                { name: 'amount', type: 'uint256' }
+                                { name: 'to', type: 'address' },
+                                { name: 'value', type: 'uint256' }
                             ],
                             outputs: [{ name: '', type: 'bool' }]
                         }
                     ],
-                    functionName: 'approve',
-                    args: [LIFI_DIAMOND, amountInWei.toString()],
+                    functionName: 'transfer',
+                    args: [agent.address, amountInWei],
                 }],
             };
 
-            const approvalResult = await MiniKit.commandsAsync.sendTransaction(approvePayload);
+            console.log('[Deposit] 📝 Transaction Payload:', JSON.stringify(payload, null, 2));
+            console.log('[Deposit] 🎯 Requesting MiniKit signature...');
 
-            if (!approvalResult.finalPayload) {
+            // Send transaction via MiniKit
+            const result = await MiniKit.commandsAsync.sendTransaction(payload as any);
+
+            console.log('[Deposit] 📦 MiniKit response:', result);
+
+            // Check result
+            if (!result.finalPayload) {
                 throw new Error('Transaction cancelled by user');
             }
 
-            if (approvalResult.finalPayload.status === 'error') {
-                throw new Error('Approval transaction failed');
+            if (result.finalPayload.status === 'error') {
+                throw new Error('Transaction failed: ' + (result.finalPayload.error || 'Unknown error'));
             }
 
-            const approvalTxId = approvalResult.finalPayload.transaction_id;
-            if (!approvalTxId) {
-                throw new Error('No approval transaction ID received');
+            const transactionId = (result.finalPayload as any).transaction_id;
+            if (!transactionId) {
+                throw new Error('No transaction ID received');
             }
 
-            console.log('[Deposit] ✅ Approval tx:', approvalTxId);
+            console.log('[Deposit] ✅ Transaction submitted!');
+            console.log('[Deposit] 📍 Transaction ID:', transactionId);
 
-            // Wait for approval confirmation
-            console.log('[Deposit] ⏳ Waiting for approval...');
-            await new Promise(resolve => setTimeout(resolve, 3000));
-
-            // Execute bridge transaction using LI.FI
-            console.log('[Deposit] 🌉 Requesting bridge transaction...');
-
-            const bridgePayload = {
-                transaction: quote.transactionRequest ? [{
-                    address: quote.transactionRequest.to,
-                    abi: [],
-                    value: quote.transactionRequest.value || '0',
-                    calldata: quote.transactionRequest.data,
-                }] : [],
-            };
-
-            const bridgeResult = await MiniKit.commandsAsync.sendTransaction(bridgePayload as any);
-
-            if (!bridgeResult.finalPayload) {
-                throw new Error('Bridge transaction cancelled by user');
-            }
-
-            if (bridgeResult.finalPayload.status === 'error') {
-                throw new Error('Bridge transaction failed');
-            }
-
-            const bridgeTxId = bridgeResult.finalPayload.transaction_id;
-            if (!bridgeTxId) {
-                throw new Error('No bridge transaction ID received');
-            }
-
-            console.log('[Deposit] ✅ Bridge tx:', bridgeTxId);
-            console.log('[Deposit] 🎉 Transaction confirmed!');
-
+            setTxHash(transactionId);
             setStatus('complete');
 
-            // Refresh balances
+            // Refresh balances after 3 seconds
             setTimeout(() => {
                 console.log('[Deposit] 🔄 Refreshing balances...');
                 refreshBalances();
-            }, 2000);
+            }, 3000);
 
-        } catch (err) {
+        } catch (err: any) {
             console.error('[Deposit] ❌ Error:', err);
-            setError(err instanceof Error ? err.message : 'Deposit failed');
+            console.error('[Deposit] ❌ Error stack:', err.stack);
+            setError(err?.message || 'Deposit failed');
             setStatus('error');
         }
     };
@@ -214,8 +151,8 @@ export default function DepositPage() {
             <div className="max-w-2xl mx-auto px-4 py-6">
                 {status === 'idle' || status === 'error' ? (
                     <>
-                        <h2 className="text-xl font-semibold mb-2">Deposit to Hyperliquid</h2>
-                        <p className="text-sm text-gray-400 mb-6">Transfer funds to start your agent</p>
+                        <h2 className="text-xl font-semibold mb-2">Deposit USDC</h2>
+                        <p className="text-sm text-gray-400 mb-6">Transfer USDC to your trading agent</p>
 
                         {/* Agent Address */}
                         <div className="card p-4 mb-4">
@@ -272,17 +209,24 @@ export default function DepositPage() {
                             </div>
                         )}
 
+                        {/* Info Box */}
+                        <div className="card p-4 mb-6 border-blue-500/50 bg-blue-500/10">
+                            <p className="text-xs text-blue-400">
+                                💡 This will transfer USDC directly from your World wallet to your agent's address on World Chain.
+                            </p>
+                        </div>
+
                         {/* Deposit Button */}
                         <button
                             onClick={handleDeposit}
                             className="btn btn-primary w-full"
                             disabled={!amount || parseFloat(amount) <= 0}
                         >
-                            Deposit with World
+                            Transfer USDC
                         </button>
 
                         <p className="text-xs text-gray-400 text-center mt-4">
-                            Funds will be bridged from World Chain to your agent on Hyperliquid
+                            Make sure you have opened this in World App
                         </p>
                     </>
                 ) : (
@@ -312,10 +256,17 @@ export default function DepositPage() {
                                 {status === 'complete' && 'Complete!'}
                             </h3>
 
-                            <p className="text-sm text-gray-400 mb-6">
-                                {status === 'confirming' && 'Your deposit is being processed'}
-                                {status === 'complete' && `${amount} USDC sent to your agent`}
+                            <p className="text-sm text-gray-400 mb-4">
+                                {status === 'confirming' && 'Waiting for transaction confirmation'}
+                                {status === 'complete' && `${amount} USDC transferred to your agent`}
                             </p>
+
+                            {txHash && (
+                                <div className="card p-3 mb-4 bg-[var(--bg-primary)]">
+                                    <p className="text-xs text-gray-400 mb-1">Transaction ID:</p>
+                                    <p className="text-xs font-mono break-all">{txHash}</p>
+                                </div>
+                            )}
 
                             {status === 'complete' && (
                                 <button onClick={handleContinue} className="btn btn-primary">
