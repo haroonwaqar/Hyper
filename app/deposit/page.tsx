@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useApp } from '../context/AppContext';
-import { MiniKit } from '@worldcoin/minikit-js';
+import { MiniKit, ResponseEvent, type MiniAppSendTransactionPayload } from '@worldcoin/minikit-js';
 
 export default function DepositPage() {
     const [amount, setAmount] = useState('10');
@@ -28,9 +28,34 @@ export default function DepositPage() {
         );
     }
 
+    // Proven MiniKit pattern from working bridge code
+    async function sendTxAndWait(payload: any, timeoutMs = 45000): Promise<MiniAppSendTransactionPayload> {
+        return await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
+                reject(new Error('Transaction timed out. Please try again.'));
+            }, timeoutMs);
+
+            // Subscribe BEFORE sending transaction
+            MiniKit.subscribe(ResponseEvent.MiniAppSendTransaction, (response) => {
+                clearTimeout(timer);
+                MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
+                resolve(response as MiniAppSendTransactionPayload);
+            });
+
+            // Send transaction
+            const commandPayload = MiniKit.commands.sendTransaction(payload as any);
+            if (!commandPayload) {
+                clearTimeout(timer);
+                MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
+                reject(new Error('World App does not support sendTransaction. Please update your World App.'));
+            }
+        });
+    }
+
     const handleDeposit = async () => {
         try {
-            console.log('[Deposit] 🚀 Starting simple USDC transfer...');
+            console.log('[Deposit] 🚀 Starting USDC transfer...');
             console.log('[Deposit] Amount:', amount, 'USDC');
             console.log('[Deposit] Agent Address:', agent.address);
 
@@ -49,8 +74,6 @@ export default function DepositPage() {
                 throw new Error('Insufficient USDC balance');
             }
 
-            console.log('[Deposit] ✅ Starting transaction...');
-
             // World Chain USDC Contract
             const WORLD_CHAIN_USDC = '0x79A02482A880bCE3F13e09Da970dC34db4CD24d1';
 
@@ -58,7 +81,7 @@ export default function DepositPage() {
             const amountInWei = Math.floor(amountNum * 1_000_000).toString();
             console.log('[Deposit] Amount in wei (6 decimals):', amountInWei);
 
-            // Create transaction payload for simple USDC transfer
+            // Create transaction payload for USDC transfer
             const payload = {
                 transaction: [{
                     address: WORLD_CHAIN_USDC,
@@ -79,75 +102,32 @@ export default function DepositPage() {
                 }],
             };
 
-            console.log('[Deposit] 📝 Transaction Payload:', JSON.stringify(payload, null, 2));
-            console.log('[Deposit] 🎯 Sending transaction to MiniKit...');
+            console.log('[Deposit] 📝 Sending transaction...');
 
-            // Use event-based API with timeout
-            const sendTransactionWithTimeout = () => {
-                return new Promise((resolve, reject) => {
-                    const timeout = setTimeout(() => {
-                        reject(new Error('Transaction request timed out after 30 seconds'));
-                    }, 30000);
-
-                    // Send transaction
-                    MiniKit.commands.sendTransaction(payload as any);
-
-                    // Listen for response
-                    const handleResponse = (response: any) => {
-                        clearTimeout(timeout);
-                        console.log('[Deposit] 📦 MiniKit response received:', response);
-                        resolve(response);
-                    };
-
-                    // Subscribe to response (MiniKit v2 pattern)
-                    if (typeof (MiniKit as any).subscribe === 'function') {
-                        (MiniKit as any).subscribe('sendTransaction', handleResponse);
-                    } else {
-                        // Fallback: wait a bit and check window events
-                        window.addEventListener('message', (event) => {
-                            if (event.data?.type === 'minikit-response') {
-                                handleResponse(event.data);
-                            }
-                        });
-                    }
-                });
-            };
-
-            const result: any = await sendTransactionWithTimeout();
+            // Use proven pattern from working bridge code
+            const result = await sendTxAndWait(payload);
 
             console.log('[Deposit] 📦 Transaction result:', result);
 
             // Check result
-            const responsePayload: any = result.finalPayload || result;
+            if (result.status === 'success') {
+                const transactionId = result.transaction_id;
+                console.log('[Deposit] ✅ Transaction successful:', transactionId);
 
-            if (!responsePayload) {
-                throw new Error('Transaction cancelled by user');
-            }
+                setTxHash(transactionId);
+                setStatus('complete');
 
-            if (responsePayload.status === 'error') {
+                // Refresh balances after 3 seconds
+                setTimeout(() => {
+                    console.log('[Deposit] 🔄 Refreshing balances...');
+                    refreshBalances();
+                }, 3000);
+            } else {
                 throw new Error('Transaction failed - please try again');
             }
 
-            const transactionId = responsePayload.transaction_id || responsePayload.transactionId;
-            if (!transactionId) {
-                throw new Error('No transaction ID received');
-            }
-
-            console.log('[Deposit] ✅ Transaction submitted!');
-            console.log('[Deposit] 📍 Transaction ID:', transactionId);
-
-            setTxHash(transactionId);
-            setStatus('complete');
-
-            // Refresh balances after 3 seconds
-            setTimeout(() => {
-                console.log('[Deposit] 🔄 Refreshing balances...');
-                refreshBalances();
-            }, 3000);
-
         } catch (err: any) {
             console.error('[Deposit] ❌ Error:', err);
-            console.error('[Deposit] ❌ Error stack:', err.stack);
             setError(err?.message || 'Deposit failed');
             setStatus('error');
         }
