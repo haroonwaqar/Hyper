@@ -80,23 +80,55 @@ export default function DepositPage() {
             };
 
             console.log('[Deposit] 📝 Transaction Payload:', JSON.stringify(payload, null, 2));
-            console.log('[Deposit] 🎯 Requesting MiniKit signature...');
+            console.log('[Deposit] 🎯 Sending transaction to MiniKit...');
 
-            // Send transaction via MiniKit
-            const result = await MiniKit.commandsAsync.sendTransaction(payload as any);
+            // Use event-based API with timeout
+            const sendTransactionWithTimeout = () => {
+                return new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => {
+                        reject(new Error('Transaction request timed out after 30 seconds'));
+                    }, 30000);
 
-            console.log('[Deposit] 📦 MiniKit response:', result);
+                    // Send transaction
+                    MiniKit.commands.sendTransaction(payload as any);
+
+                    // Listen for response
+                    const handleResponse = (response: any) => {
+                        clearTimeout(timeout);
+                        console.log('[Deposit] 📦 MiniKit response received:', response);
+                        resolve(response);
+                    };
+
+                    // Subscribe to response (MiniKit v2 pattern)
+                    if (typeof (MiniKit as any).subscribe === 'function') {
+                        (MiniKit as any).subscribe('sendTransaction', handleResponse);
+                    } else {
+                        // Fallback: wait a bit and check window events
+                        window.addEventListener('message', (event) => {
+                            if (event.data?.type === 'minikit-response') {
+                                handleResponse(event.data);
+                            }
+                        });
+                    }
+                });
+            };
+
+            const result: any = await sendTransactionWithTimeout();
+
+            console.log('[Deposit] 📦 Transaction result:', result);
 
             // Check result
-            if (!result.finalPayload) {
+            const responsePayload: any = result.finalPayload || result;
+
+            if (!responsePayload) {
                 throw new Error('Transaction cancelled by user');
             }
 
-            if (result.finalPayload.status === 'error') {
+            if (responsePayload.status === 'error') {
                 throw new Error('Transaction failed - please try again');
             }
 
-            const transactionId = (result.finalPayload as any).transaction_id;
+            const transactionId = responsePayload.transaction_id || responsePayload.transactionId;
             if (!transactionId) {
                 throw new Error('No transaction ID received');
             }
