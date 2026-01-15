@@ -125,7 +125,7 @@ export default function DepositPage() {
             console.log('[Deposit] 🌉 Requesting bridge transaction...');
 
             const bridgePayload = {
-                transactions: quote.transactionRequest ? [{
+                transaction: quote.transactionRequest ? [{
                     address: quote.transactionRequest.to,
                     abi: [],
                     value: quote.transactionRequest.value || '0',
@@ -133,7 +133,7 @@ export default function DepositPage() {
                 }] : [],
             };
 
-            const bridgeResult = await MiniKit.commandsAsync.sendTransaction(bridgePayload);
+            const bridgeResult = await MiniKit.commandsAsync.sendTransaction(bridgePayload as any);
 
             if (!bridgeResult.finalPayload) {
                 throw new Error('Bridge transaction cancelled by user');
