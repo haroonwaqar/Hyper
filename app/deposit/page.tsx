@@ -49,12 +49,7 @@ export default function DepositPage() {
                 throw new Error('Insufficient USDC balance');
             }
 
-            // Check MiniKit
-            if (!MiniKit.isInstalled()) {
-                throw new Error('World App not detected. Please open this in World App.');
-            }
-
-            console.log('[Deposit] ✅ MiniKit detected');
+            console.log('[Deposit] ✅ Starting transaction...');
 
             // World Chain USDC Contract
             const WORLD_CHAIN_USDC = '0x79A02482A880bCE3F13e09Da970dC34db4CD24d1';
