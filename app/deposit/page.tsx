@@ -98,7 +98,7 @@ export default function DepositPage() {
             }
 
             if (result.finalPayload.status === 'error') {
-                throw new Error('Transaction failed: ' + (result.finalPayload.error || 'Unknown error'));
+                throw new Error('Transaction failed - please try again');
             }
 
             const transactionId = (result.finalPayload as any).transaction_id;
