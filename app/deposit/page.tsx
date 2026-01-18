@@ -5,20 +5,20 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useApp } from '../context/AppContext';
 import { MiniKit, ResponseEvent, type MiniAppSendTransactionPayload } from '@worldcoin/minikit-js';
-
-const WORLD_CHAIN_USDC = '0x79A02482A880bCE3F13e09Da970dC34db4CD24d1';
+import { LIFI_DIAMOND_CONTRACT } from '@/lib/constants';
+import { getFunctionSelector } from '@/lib/usdc';
 
 export default function DepositPage() {
     const [amount, setAmount] = useState('10');
     const [status, setStatus] = useState<'idle' | 'confirming' | 'complete' | 'error'>('idle');
     const [error, setError] = useState<string | null>(null);
     const [txHash, setTxHash] = useState<string | null>(null);
+    const [entrypointSelector, setEntrypointSelector] = useState<string | null>(null);
     const router = useRouter();
-    const { worldChainBalance, agent, hasAgent, refreshBalances } = useApp();
+    const { worldChainBalance, agent, hasAgent, refreshBalances, userAddress } = useApp();
     const didInitRef = useRef(false);
-    const [lifiPermit2Proxy, setLifiPermit2Proxy] = useState<string | null>(null);
 
-    // Initialize MiniKit and fetch LI.FI metadata
+    // Initialize MiniKit on mount
     useEffect(() => {
         if (didInitRef.current) return;
         didInitRef.current = true;
@@ -26,27 +26,6 @@ export default function DepositPage() {
         console.log('[Deposit] Initializing MiniKit...');
         MiniKit.install(process.env.NEXT_PUBLIC_WLD_APP_ID);
         console.log('[Deposit] MiniKit installed');
-
-        // Fetch LI.FI Permit2Proxy address
-        (async () => {
-            try {
-                const res = await fetch('https://li.quest/v1/chains', {
-                    method: 'GET',
-                    headers: { Accept: 'application/json' }
-                });
-                const json = await res.json();
-                const chain = json?.chains?.find((c: any) => c?.id === 480); // World Chain
-                const proxy = chain?.permit2Proxy;
-                if (proxy) {
-                    console.log('[Deposit] LI.FI Permit2Proxy:', proxy);
-                    setLifiPermit2Proxy(proxy);
-                } else {
-                    console.error('[Deposit] No Permit2Proxy found for World Chain');
-                }
-            } catch (e: any) {
-                console.error('[Deposit] Failed to fetch LI.FI metadata:', e);
-            }
-        })();
     }, []);
 
     if (!hasAgent || !agent) {
@@ -71,7 +50,7 @@ export default function DepositPage() {
             const timer = setTimeout(() => {
                 console.log('[Deposit] ❌ Timeout');
                 MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
-                reject(new Error('Transaction timed out. Please try again.'));
+                reject(new Error('Transaction timed out. Ensure LI.FI router entrypoint is whitelisted in Developer Portal.'));
             }, timeoutMs);
 
             console.log('[Deposit] Setting up subscription...');
@@ -90,17 +69,19 @@ export default function DepositPage() {
             if (!commandPayload) {
                 clearTimeout(timer);
                 MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
-                reject(new Error('MiniKit sendTransaction unavailable'));
+                reject(new Error('MiniKit sendTransaction unavailable. Update World App and ensure contract is whitelisted.'));
             }
         });
     }
 
-    function randomUint256String(): string {
-        const bytes = new Uint8Array(32);
-        crypto.getRandomValues(bytes);
-        let hex = '0x';
-        for (const b of bytes) hex += b.toString(16).padStart(2, '0');
-        return BigInt(hex).toString(10);
+    function normalizeHexValue(value: string | undefined, fieldLabel: string) {
+        if (!value) return undefined;
+        if (value.startsWith('0x')) return value;
+        try {
+            return `0x${BigInt(value).toString(16)}`;
+        } catch {
+            throw new Error(`Invalid ${fieldLabel} value from quote`);
+        }
     }
 
     const handleDeposit = async () => {
@@ -108,7 +89,6 @@ export default function DepositPage() {
             console.log('[Deposit] ==================== START ====================');
             console.log('[Deposit] Amount:', amount, 'USDC');
             console.log('[Deposit] Agent:', agent.address);
-            console.log('[Deposit] Permit2Proxy:', lifiPermit2Proxy);
 
             setStatus('confirming');
             setError(null);
@@ -124,56 +104,45 @@ export default function DepositPage() {
                 throw new Error('Insufficient USDC balance');
             }
 
-            if (!lifiPermit2Proxy) {
-                throw new Error('LI.FI Permit2Proxy not loaded. Please refresh and try again.');
+            if (!userAddress) {
+                throw new Error('Wallet not connected');
             }
 
-            const amountBigInt = BigInt(Math.floor(amountNum * 1_000_000));
-            console.log('[Deposit] Amount:', amountBigInt.toString());
+            // Fetch bridge quote from LI.FI (World Chain -> Arbitrum USDC)
+            const quoteRes = await fetch('/api/quote', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    amountUsdc: amount,
+                    fromAddress: userAddress,
+                    toAddress: agent.address,
+                }),
+            });
 
-            // Use simple USDC transfer on World Chain (same chain, no bridge needed)
-            // This uses Permit2 to avoid needing approval transaction
-            const nonce = randomUint256String();
-            const deadline = BigInt(Math.floor(Date.now() / 1000) + 20 * 60).toString(10);
+            const quoteJson = await quoteRes.json();
+            if (!quoteRes.ok) {
+                throw new Error(quoteJson?.message || 'Failed to fetch bridge quote');
+            }
 
-            console.log('[Deposit] Building Permit2 transfer payload...');
+            const transactionRequest = quoteJson?.transactionRequest;
+            if (!transactionRequest?.to || !transactionRequest?.data) {
+                throw new Error('Bridge quote missing transaction request');
+            }
 
-            const payload = {
-                transaction: [{
-                    address: lifiPermit2Proxy as `0x${string}`,
-                    abi: [
-                        {
-                            type: 'function',
-                            name: 'transferWithPermit2',
-                            inputs: [
-                                { name: 'token', type: 'address' },
-                                { name: 'to', type: 'address' },
-                                { name: 'amount', type: 'uint256' },
-                                { name: 'nonce', type: 'uint256' },
-                                { name: 'deadline', type: 'uint256' }
-                            ],
-                            outputs: [],
-                            stateMutability: 'nonpayable'
-                        }
-                    ],
-                    functionName: 'transferWithPermit2',
-                    args: [
-                        WORLD_CHAIN_USDC,
-                        agent.address,
-                        amountBigInt.toString(),
-                        nonce,
-                        deadline
-                    ],
-                }],
-                permit2: [{
-                    permitted: {
-                        token: WORLD_CHAIN_USDC,
-                        amount: amountBigInt.toString(),
+            const selector = getFunctionSelector(transactionRequest.data);
+            setEntrypointSelector(selector);
+
+            const payload: any = {
+                transaction: [
+                    {
+                        to: transactionRequest.to,
+                        data: transactionRequest.data,
+                        value: normalizeHexValue(transactionRequest.value, 'transaction value'),
+                        gasLimit: normalizeHexValue(transactionRequest.gasLimit, 'gas limit'),
+                        gasPrice: normalizeHexValue(transactionRequest.gasPrice, 'gas price'),
                     },
-                    spender: lifiPermit2Proxy,
-                    nonce,
-                    deadline,
-                }],
+                ],
+                formatPayload: false,
             };
 
             console.log('[Deposit] Payload:', JSON.stringify(payload, null, 2));
@@ -231,7 +200,7 @@ export default function DepositPage() {
                 {status === 'idle' || status === 'error' ? (
                     <>
                         <h2 className="text-xl font-semibold mb-2">Deposit USDC</h2>
-                        <p className="text-sm text-gray-400 mb-6">Transfer USDC to your trading agent</p>
+                        <p className="text-sm text-gray-400 mb-6">Bridge USDC to your trading agent on Hyperliquid</p>
 
                         <div className="card p-4 mb-4">
                             <p className="text-xs text-gray-400 mb-2">Agent Address</p>
@@ -284,22 +253,29 @@ export default function DepositPage() {
                             </div>
                         )}
 
-                        {!lifiPermit2Proxy && (
-                            <div className="card p-4 mb-6 border-yellow-500/50 bg-yellow-500/10">
-                                <p className="text-xs text-yellow-600">Loading LI.FI metadata...</p>
-                            </div>
-                        )}
+                        <div className="card p-4 mb-6 border-yellow-500/50 bg-yellow-500/10">
+                            <p className="text-xs text-yellow-600 font-semibold mb-2">⚠️ Developer Portal Setup Required</p>
+                            <p className="text-xs text-yellow-600 mb-2">
+                                Add this LI.FI router entrypoint:
+                            </p>
+                            <code className="block bg-black/20 p-2 rounded text-xs font-mono break-all">
+                                {LIFI_DIAMOND_CONTRACT},{entrypointSelector || '0x...'}
+                            </code>
+                            <p className="text-[11px] text-yellow-700 mt-2">
+                                The function selector appears after fetching a quote.
+                            </p>
+                        </div>
 
                         <button
                             onClick={handleDeposit}
                             className="btn btn-primary w-full"
-                            disabled={!amount || parseFloat(amount) <= 0 || !lifiPermit2Proxy}
+                            disabled={!amount || parseFloat(amount) <= 0}
                         >
                             Transfer USDC
                         </button>
 
                         <p className="text-xs text-gray-400 text-center mt-4">
-                            Open browser console (F12) to see detailed logs
+                            Open browser console (F12) for detailed logs
                         </p>
                     </>
                 ) : (
@@ -329,8 +305,8 @@ export default function DepositPage() {
                             </h3>
 
                             <p className="text-sm text-gray-400 mb-4">
-                                {status === 'confirming' && 'Waiting for transaction confirmation'}
-                                {status === 'complete' && `${amount} USDC transferred to your agent`}
+                                {status === 'confirming' && 'Waiting for confirmation'}
+                                {status === 'complete' && `${amount} USDC transferred!`}
                             </p>
 
                             {txHash && (
