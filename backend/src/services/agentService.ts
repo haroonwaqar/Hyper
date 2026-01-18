@@ -215,15 +215,27 @@ export class AgentService {
         const transport = new HttpTransport(); // Defaults to Mainnet
         const infoClient = new InfoClient({ transport });
 
-        // Fetch USDC Balance (Spot)
+        // Fetch account value from perp clearinghouse (deposits land here).
         let usdcBalance = '0';
         try {
-            const state = await infoClient.spotClearinghouseState({ user: agent.walletAddress });
-            const usdc = state.balances.find((b: any) => b.coin === 'USDC');
-            usdcBalance = usdc ? usdc.total : '0';
+            const clearinghouse = await infoClient.clearinghouseState({ user: agent.walletAddress });
+            const accountValue = clearinghouse?.marginSummary?.accountValue;
+            if (accountValue != null) {
+                usdcBalance = String(accountValue);
+            }
         } catch (error) {
-            console.error('Error fetching HL state:', error);
-            // It's possible the address has no state on Hyperliquid yet
+            console.error('Error fetching HL clearinghouse state:', error);
+        }
+
+        // Fallback: spot USDC balance (may be zero even after deposit).
+        if (!usdcBalance || usdcBalance === '0') {
+            try {
+                const spot = await infoClient.spotClearinghouseState({ user: agent.walletAddress });
+                const usdc = spot.balances.find((b: any) => b.coin === 'USDC');
+                usdcBalance = usdc ? usdc.total : '0';
+            } catch (error) {
+                console.error('Error fetching HL spot state:', error);
+            }
         }
 
         return {
