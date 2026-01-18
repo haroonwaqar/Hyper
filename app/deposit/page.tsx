@@ -43,13 +43,9 @@ export default function DepositPage() {
                 resolve(response as MiniAppSendTransactionPayload);
             });
 
-            // Send transaction
-            const commandPayload = MiniKit.commands.sendTransaction(payload as any);
-            if (!commandPayload) {
-                clearTimeout(timer);
-                MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
-                reject(new Error('World App does not support sendTransaction. Please update your World App.'));
-            }
+            // Send transaction - just send it without checking return value
+            // The subscription will handle the response
+            MiniKit.commands.sendTransaction(payload as any);
         });
     }
 
