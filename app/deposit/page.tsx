@@ -1,10 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useApp } from '../context/AppContext';
 import { MiniKit, ResponseEvent, type MiniAppSendTransactionPayload } from '@worldcoin/minikit-js';
+
+const WORLD_CHAIN_USDC = '0x79A02482A880bCE3F13e09Da970dC34db4CD24d1';
 
 export default function DepositPage() {
     const [amount, setAmount] = useState('10');
@@ -13,6 +15,39 @@ export default function DepositPage() {
     const [txHash, setTxHash] = useState<string | null>(null);
     const router = useRouter();
     const { worldChainBalance, agent, hasAgent, refreshBalances } = useApp();
+    const didInitRef = useRef(false);
+    const [lifiPermit2Proxy, setLifiPermit2Proxy] = useState<string | null>(null);
+
+    // Initialize MiniKit and fetch LI.FI metadata
+    useEffect(() => {
+        if (didInitRef.current) return;
+        didInitRef.current = true;
+
+        console.log('[Deposit] Initializing MiniKit...');
+        MiniKit.install(process.env.NEXT_PUBLIC_WLD_APP_ID);
+        console.log('[Deposit] MiniKit installed');
+
+        // Fetch LI.FI Permit2Proxy address
+        (async () => {
+            try {
+                const res = await fetch('https://li.quest/v1/chains', {
+                    method: 'GET',
+                    headers: { Accept: 'application/json' }
+                });
+                const json = await res.json();
+                const chain = json?.chains?.find((c: any) => c?.id === 480); // World Chain
+                const proxy = chain?.permit2Proxy;
+                if (proxy) {
+                    console.log('[Deposit] LI.FI Permit2Proxy:', proxy);
+                    setLifiPermit2Proxy(proxy);
+                } else {
+                    console.error('[Deposit] No Permit2Proxy found for World Chain');
+                }
+            } catch (e: any) {
+                console.error('[Deposit] Failed to fetch LI.FI metadata:', e);
+            }
+        })();
+    }, []);
 
     if (!hasAgent || !agent) {
         return (
@@ -28,38 +63,57 @@ export default function DepositPage() {
         );
     }
 
-    // Proven MiniKit pattern from working bridge code
+    // Exact pattern from working bridge code
     async function sendTxAndWait(payload: any, timeoutMs = 45000): Promise<MiniAppSendTransactionPayload> {
+        console.log('[Deposit] sendTxAndWait called');
+
         return await new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
+                console.log('[Deposit] ❌ Timeout');
                 MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
                 reject(new Error('Transaction timed out. Please try again.'));
             }, timeoutMs);
 
-            // Subscribe BEFORE sending transaction
+            console.log('[Deposit] Setting up subscription...');
+
             MiniKit.subscribe(ResponseEvent.MiniAppSendTransaction, (response) => {
+                console.log('[Deposit] ✅ Response received:', response);
                 clearTimeout(timer);
                 MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
                 resolve(response as MiniAppSendTransactionPayload);
             });
 
-            // Send transaction - just send it without checking return value
-            // The subscription will handle the response
-            MiniKit.commands.sendTransaction(payload as any);
+            console.log('[Deposit] Calling sendTransaction...');
+            const commandPayload = MiniKit.commands.sendTransaction(payload as any);
+            console.log('[Deposit] Command result:', commandPayload);
+
+            if (!commandPayload) {
+                clearTimeout(timer);
+                MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
+                reject(new Error('MiniKit sendTransaction unavailable'));
+            }
         });
+    }
+
+    function randomUint256String(): string {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        let hex = '0x';
+        for (const b of bytes) hex += b.toString(16).padStart(2, '0');
+        return BigInt(hex).toString(10);
     }
 
     const handleDeposit = async () => {
         try {
-            console.log('[Deposit] 🚀 Starting USDC transfer...');
+            console.log('[Deposit] ==================== START ====================');
             console.log('[Deposit] Amount:', amount, 'USDC');
-            console.log('[Deposit] Agent Address:', agent.address);
+            console.log('[Deposit] Agent:', agent.address);
+            console.log('[Deposit] Permit2Proxy:', lifiPermit2Proxy);
 
             setStatus('confirming');
             setError(null);
             setTxHash(null);
 
-            // Validate amount
             const amountNum = parseFloat(amount);
             if (isNaN(amountNum) || amountNum <= 0) {
                 throw new Error('Invalid amount');
@@ -70,60 +124,84 @@ export default function DepositPage() {
                 throw new Error('Insufficient USDC balance');
             }
 
-            // World Chain USDC Contract
-            const WORLD_CHAIN_USDC = '0x79A02482A880bCE3F13e09Da970dC34db4CD24d1';
+            if (!lifiPermit2Proxy) {
+                throw new Error('LI.FI Permit2Proxy not loaded. Please refresh and try again.');
+            }
 
-            // Convert amount to USDC format (6 decimals)
-            const amountInWei = Math.floor(amountNum * 1_000_000).toString();
-            console.log('[Deposit] Amount in wei (6 decimals):', amountInWei);
+            const amountBigInt = BigInt(Math.floor(amountNum * 1_000_000));
+            console.log('[Deposit] Amount:', amountBigInt.toString());
 
-            // Create transaction payload for USDC transfer
+            // Use simple USDC transfer on World Chain (same chain, no bridge needed)
+            // This uses Permit2 to avoid needing approval transaction
+            const nonce = randomUint256String();
+            const deadline = BigInt(Math.floor(Date.now() / 1000) + 20 * 60).toString(10);
+
+            console.log('[Deposit] Building Permit2 transfer payload...');
+
             const payload = {
                 transaction: [{
-                    address: WORLD_CHAIN_USDC,
+                    address: lifiPermit2Proxy as `0x${string}`,
                     abi: [
                         {
-                            name: 'transfer',
                             type: 'function',
-                            stateMutability: 'nonpayable',
+                            name: 'transferWithPermit2',
                             inputs: [
+                                { name: 'token', type: 'address' },
                                 { name: 'to', type: 'address' },
-                                { name: 'value', type: 'uint256' }
+                                { name: 'amount', type: 'uint256' },
+                                { name: 'nonce', type: 'uint256' },
+                                { name: 'deadline', type: 'uint256' }
                             ],
-                            outputs: [{ name: '', type: 'bool' }]
+                            outputs: [],
+                            stateMutability: 'nonpayable'
                         }
                     ],
-                    functionName: 'transfer',
-                    args: [agent.address, amountInWei],
+                    functionName: 'transferWithPermit2',
+                    args: [
+                        WORLD_CHAIN_USDC,
+                        agent.address,
+                        amountBigInt.toString(),
+                        nonce,
+                        deadline
+                    ],
+                }],
+                permit2: [{
+                    permitted: {
+                        token: WORLD_CHAIN_USDC,
+                        amount: amountBigInt.toString(),
+                    },
+                    spender: lifiPermit2Proxy,
+                    nonce,
+                    deadline,
                 }],
             };
 
-            console.log('[Deposit] 📝 Sending transaction...');
+            console.log('[Deposit] Payload:', JSON.stringify(payload, null, 2));
 
-            // Use proven pattern from working bridge code
             const result = await sendTxAndWait(payload);
 
-            console.log('[Deposit] 📦 Transaction result:', result);
+            console.log('[Deposit] Result:', result);
 
-            // Check result
             if (result.status === 'success') {
                 const transactionId = result.transaction_id;
-                console.log('[Deposit] ✅ Transaction successful:', transactionId);
+                console.log('[Deposit] ✅ Success! TX:', transactionId);
 
                 setTxHash(transactionId);
                 setStatus('complete');
 
-                // Refresh balances after 3 seconds
                 setTimeout(() => {
-                    console.log('[Deposit] 🔄 Refreshing balances...');
+                    console.log('[Deposit] Refreshing balances...');
                     refreshBalances();
                 }, 3000);
             } else {
-                throw new Error('Transaction failed - please try again');
+                throw new Error('Transaction failed');
             }
 
+            console.log('[Deposit] ==================== SUCCESS ====================');
+
         } catch (err: any) {
-            console.error('[Deposit] ❌ Error:', err);
+            console.error('[Deposit] ==================== ERROR ====================');
+            console.error('[Deposit] Error:', err);
             setError(err?.message || 'Deposit failed');
             setStatus('error');
         }
@@ -135,7 +213,6 @@ export default function DepositPage() {
 
     return (
         <div className="min-h-screen pb-24">
-            {/* Header */}
             <div className="sticky top-0 z-10 bg-[var(--bg-primary)] border-b border-[var(--border-color)] px-4 py-3">
                 <div className="flex items-center justify-between max-w-2xl mx-auto">
                     <Link href="/dashboard">
@@ -150,20 +227,17 @@ export default function DepositPage() {
                 </div>
             </div>
 
-            {/* Content */}
             <div className="max-w-2xl mx-auto px-4 py-6">
                 {status === 'idle' || status === 'error' ? (
                     <>
                         <h2 className="text-xl font-semibold mb-2">Deposit USDC</h2>
                         <p className="text-sm text-gray-400 mb-6">Transfer USDC to your trading agent</p>
 
-                        {/* Agent Address */}
                         <div className="card p-4 mb-4">
                             <p className="text-xs text-gray-400 mb-2">Agent Address</p>
                             <p className="text-sm font-mono break-all">{agent.address}</p>
                         </div>
 
-                        {/* Balance Display */}
                         <div className="card p-4 mb-6">
                             <div className="flex items-center justify-between mb-4">
                                 <span className="text-sm text-gray-400">Available on World Chain</span>
@@ -181,7 +255,6 @@ export default function DepositPage() {
                             </div>
                         </div>
 
-                        {/* Amount Input */}
                         <div className="card p-4 mb-6">
                             <label className="text-sm text-gray-400 mb-2 block">Deposit Amount</label>
                             <div className="flex items-center gap-3">
@@ -205,35 +278,31 @@ export default function DepositPage() {
                             </button>
                         </div>
 
-                        {/* Error Display */}
                         {error && (
                             <div className="card p-4 mb-6 border-red-500/50 bg-red-500/10">
-                                <p className="text-sm text-red-500">{error}</p>
+                                <p className="text-sm text-red-500 whitespace-pre-line">{error}</p>
                             </div>
                         )}
 
-                        {/* Info Box */}
-                        <div className="card p-4 mb-6 border-blue-500/50 bg-blue-500/10">
-                            <p className="text-xs text-blue-400">
-                                💡 This will transfer USDC directly from your World wallet to your agent's address on World Chain.
-                            </p>
-                        </div>
+                        {!lifiPermit2Proxy && (
+                            <div className="card p-4 mb-6 border-yellow-500/50 bg-yellow-500/10">
+                                <p className="text-xs text-yellow-600">Loading LI.FI metadata...</p>
+                            </div>
+                        )}
 
-                        {/* Deposit Button */}
                         <button
                             onClick={handleDeposit}
                             className="btn btn-primary w-full"
-                            disabled={!amount || parseFloat(amount) <= 0}
+                            disabled={!amount || parseFloat(amount) <= 0 || !lifiPermit2Proxy}
                         >
                             Transfer USDC
                         </button>
 
                         <p className="text-xs text-gray-400 text-center mt-4">
-                            Make sure you have opened this in World App
+                            Open browser console (F12) to see detailed logs
                         </p>
                     </>
                 ) : (
-                    /* Status Display */
                     <div className="card p-6">
                         <div className="text-center">
                             <div className="mb-4">
