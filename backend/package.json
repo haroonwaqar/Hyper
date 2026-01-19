@@ -8,7 +8,8 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "db:push:turso": "tsx src/scripts/syncTurso.ts",
-    "health-check": "tsx src/scripts/health-check.ts"
+    "health-check": "tsx src/scripts/health-check.ts",
+    "sweep-to-hyperliquid": "tsx src/scripts/sweep-to-hyperliquid.ts"
   },
   "keywords": [],
   "author": "",

@@ -26,6 +26,7 @@ interface AppContextType {
     // Balances
     worldChainBalance: string | null;
     hyperliquidBalance: string | null;
+    arbUsdcBalance: string | null;
     refreshBalances: () => Promise<void>;
 }
 
@@ -43,6 +44,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const [worldChainBalance, setWorldChainBalance] = useState<string | null>(null);
     const [hyperliquidBalance, setHyperliquidBalance] = useState<string | null>(null);
+    const [arbUsdcBalance, setArbUsdcBalance] = useState<string | null>(null);
 
     // Initialize MiniKit and authenticate on mount
     useEffect(() => {
@@ -150,6 +152,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             const response = await getAgentStatus(userAddress);
             setAgent(response.agent);
             setHyperliquidBalance(response.agent.usdcBalance);
+            setArbUsdcBalance(response.agent.arbUsdcBalance ?? null);
         } catch (error) {
             // No agent exists yet - this is expected for new users
             console.log('No agent found:', error);
@@ -266,6 +269,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         refreshAgent,
         worldChainBalance,
         hyperliquidBalance,
+        arbUsdcBalance,
         refreshBalances,
     };
 

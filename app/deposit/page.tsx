@@ -5,8 +5,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useApp } from '../context/AppContext';
 import { MiniKit, ResponseEvent, type MiniAppSendTransactionPayload } from '@worldcoin/minikit-js';
-import { LIFI_DIAMOND_CONTRACT } from '@/lib/constants';
-import { getFunctionSelector } from '@/lib/usdc';
+import { parseAbi } from 'viem';
+import { LIFI_DIAMOND_CONTRACT, WORLDCHAIN_USDC, WORLD_CHAIN_ID } from '@/lib/constants';
+import { getFunctionSelector, parseUsdcToBaseUnits } from '@/lib/usdc';
 
 export default function DepositPage() {
     const [amount, setAmount] = useState('10');
@@ -14,9 +15,28 @@ export default function DepositPage() {
     const [error, setError] = useState<string | null>(null);
     const [txHash, setTxHash] = useState<string | null>(null);
     const [entrypointSelector, setEntrypointSelector] = useState<string | null>(null);
+    const [routerAddress, setRouterAddress] = useState<string | null>(null);
+    const [lifiPermit2Proxy, setLifiPermit2Proxy] = useState<`0x${string}` | null>(null);
+    const [lifiPermit2ProxyError, setLifiPermit2ProxyError] = useState<string | null>(null);
     const router = useRouter();
     const { worldChainBalance, agent, hasAgent, refreshBalances, userAddress } = useApp();
     const didInitRef = useRef(false);
+
+    const LIFI_PERMIT2_PROXY_ABI = parseAbi([
+        'function callDiamondWithPermit2(bytes transactionData, ((address token, uint256 amount) permitted, uint256 nonce, uint256 deadline) permit, bytes signature) external',
+    ]);
+
+    function isLikelyEvmAddress(addr: string): addr is `0x${string}` {
+        return /^0x[a-fA-F0-9]{40}$/.test(addr);
+    }
+
+    function randomUint256String(): string {
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        let hex = '0x';
+        for (const b of bytes) hex += b.toString(16).padStart(2, '0');
+        return BigInt(hex).toString(10);
+    }
 
     // Initialize MiniKit on mount
     useEffect(() => {
@@ -26,6 +46,32 @@ export default function DepositPage() {
         console.log('[Deposit] Initializing MiniKit...');
         MiniKit.install(process.env.NEXT_PUBLIC_WLD_APP_ID);
         console.log('[Deposit] MiniKit installed');
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                setLifiPermit2ProxyError(null);
+                const res = await fetch('https://li.quest/v1/chains', {
+                    method: 'GET',
+                    headers: { Accept: 'application/json' },
+                });
+                const json = await res.json();
+                const chain = json?.chains?.find((c: any) => c?.id === WORLD_CHAIN_ID);
+                const proxy = chain?.permit2Proxy;
+                if (proxy && isLikelyEvmAddress(proxy)) {
+                    if (!cancelled) setLifiPermit2Proxy(proxy);
+                    return;
+                }
+                throw new Error('LI.FI did not return permit2Proxy for World Chain');
+            } catch (e: any) {
+                if (!cancelled) setLifiPermit2ProxyError(e?.message ?? 'Failed to load LI.FI chain metadata');
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     if (!hasAgent || !agent) {
@@ -42,34 +88,39 @@ export default function DepositPage() {
         );
     }
 
-    // Exact pattern from working bridge code
-    async function sendTxAndWait(payload: any, timeoutMs = 45000): Promise<MiniAppSendTransactionPayload> {
+    async function sendTxAndWait(payload: any, timeoutMs = 120000): Promise<MiniAppSendTransactionPayload> {
         console.log('[Deposit] sendTxAndWait called');
+
+        if (!MiniKit.isInstalled()) {
+            throw new Error('Please open this app in World App');
+        }
 
         return await new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 console.log('[Deposit] ❌ Timeout');
                 MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
-                reject(new Error('Transaction timed out. Ensure LI.FI router entrypoint is whitelisted in Developer Portal.'));
+                reject(
+                    new Error(
+                        'Timed out waiting for World App. If no confirmation sheet appeared, ensure sendTransaction is enabled and the contract entrypoints are allowlisted.'
+                    )
+                );
             }, timeoutMs);
 
-            console.log('[Deposit] Setting up subscription...');
-
-            MiniKit.subscribe(ResponseEvent.MiniAppSendTransaction, (response) => {
-                console.log('[Deposit] ✅ Response received:', response);
+            MiniKit.subscribe(ResponseEvent.MiniAppSendTransaction, (finalPayload) => {
                 clearTimeout(timer);
                 MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
-                resolve(response as MiniAppSendTransactionPayload);
+                resolve(finalPayload as MiniAppSendTransactionPayload);
             });
 
-            console.log('[Deposit] Calling sendTransaction...');
             const commandPayload = MiniKit.commands.sendTransaction(payload as any);
-            console.log('[Deposit] Command result:', commandPayload);
-
             if (!commandPayload) {
                 clearTimeout(timer);
                 MiniKit.unsubscribe(ResponseEvent.MiniAppSendTransaction);
-                reject(new Error('MiniKit sendTransaction unavailable. Update World App and ensure contract is whitelisted.'));
+                reject(
+                    new Error(
+                        'sendTransaction is unavailable in this World App session. Update World App and ensure contract entrypoints are allowlisted.'
+                    )
+                );
             }
         });
     }
@@ -131,21 +182,53 @@ export default function DepositPage() {
 
             const selector = getFunctionSelector(transactionRequest.data);
             setEntrypointSelector(selector);
+            setRouterAddress(transactionRequest.to);
+
+            const amountBaseUnits = BigInt(parseUsdcToBaseUnits(amount));
+            if (amountBaseUnits <= 0n) {
+                throw new Error('Invalid amount');
+            }
+            const amountBaseUnitsStr = amountBaseUnits.toString(10);
+            if (!lifiPermit2Proxy) {
+                throw new Error(
+                    `Permit2 proxy not available. ${lifiPermit2ProxyError ?? 'Ensure LI.FI supports Permit2 on World Chain.'}`
+                );
+            }
+
+            const nonce = randomUint256String();
+            const deadline = BigInt(Math.floor(Date.now() / 1000) + 20 * 60).toString(10);
 
             const payload: any = {
                 transaction: [
                     {
-                        to: transactionRequest.to,
-                        data: transactionRequest.data,
-                        value: normalizeHexValue(transactionRequest.value, 'transaction value'),
-                        gasLimit: normalizeHexValue(transactionRequest.gasLimit, 'gas limit'),
-                        gasPrice: normalizeHexValue(transactionRequest.gasPrice, 'gas price'),
+                        address: lifiPermit2Proxy,
+                        abi: LIFI_PERMIT2_PROXY_ABI,
+                        functionName: 'callDiamondWithPermit2',
+                        args: [
+                            transactionRequest.data,
+                            [[WORLDCHAIN_USDC, amountBaseUnitsStr], nonce, deadline],
+                            'PERMIT2_SIGNATURE_PLACEHOLDER_0',
+                        ],
+                        value: transactionRequest.value ?? '0x0',
                     },
                 ],
-                formatPayload: false,
+                permit2: [
+                    {
+                        permitted: {
+                            token: WORLDCHAIN_USDC,
+                            amount: amountBaseUnitsStr,
+                        },
+                        spender: lifiPermit2Proxy,
+                        nonce,
+                        deadline,
+                    },
+                ],
             };
 
-            console.log('[Deposit] Payload:', JSON.stringify(payload, null, 2));
+            console.log(
+                '[Deposit] Payload:',
+                JSON.stringify(payload, (_k, v) => (typeof v === 'bigint' ? v.toString(10) : v), 2)
+            );
 
             const result = await sendTxAndWait(payload);
 
@@ -162,8 +245,22 @@ export default function DepositPage() {
                     console.log('[Deposit] Refreshing balances...');
                     refreshBalances();
                 }, 3000);
+
+                // Poll balances for a short period to catch bridge finality.
+                (async () => {
+                    for (let i = 0; i < 12; i += 1) {
+                        await new Promise((resolve) => setTimeout(resolve, 10000));
+                        try {
+                            await refreshBalances();
+                        } catch (e) {
+                            console.warn('[Deposit] Balance refresh failed:', e);
+                        }
+                    }
+                })();
             } else {
-                throw new Error('Transaction failed');
+                const errorCode = (result as any).error_code || 'Transaction failed';
+                const details = (result as any).details;
+                throw new Error(details ? `${errorCode}: ${details}` : errorCode);
             }
 
             console.log('[Deposit] ==================== SUCCESS ====================');
@@ -256,13 +353,22 @@ export default function DepositPage() {
                         <div className="card p-4 mb-6 border-yellow-500/50 bg-yellow-500/10">
                             <p className="text-xs text-yellow-600 font-semibold mb-2">⚠️ Developer Portal Setup Required</p>
                             <p className="text-xs text-yellow-600 mb-2">
-                                Add this LI.FI router entrypoint:
+                                Use one address per line (no commas):
                             </p>
-                            <code className="block bg-black/20 p-2 rounded text-xs font-mono break-all">
-                                {LIFI_DIAMOND_CONTRACT},{entrypointSelector || '0x...'}
+                            <p className="text-[11px] text-yellow-700 mb-1">Whitelisted Payment Addresses</p>
+                            <code className="block bg-black/20 p-2 rounded text-xs font-mono whitespace-pre-wrap break-all mb-2">
+                                {`${routerAddress || LIFI_DIAMOND_CONTRACT}\n${WORLDCHAIN_USDC}`}
+                            </code>
+                            <p className="text-[11px] text-yellow-700 mb-1">Permit2 Tokens</p>
+                            <code className="block bg-black/20 p-2 rounded text-xs font-mono whitespace-pre-wrap break-all mb-2">
+                                {WORLDCHAIN_USDC}
+                            </code>
+                            <p className="text-[11px] text-yellow-700 mb-1">Contract Entrypoints</p>
+                            <code className="block bg-black/20 p-2 rounded text-xs font-mono whitespace-pre-wrap break-all">
+                                {lifiPermit2Proxy || 'Loading...'}
                             </code>
                             <p className="text-[11px] text-yellow-700 mt-2">
-                                The function selector appears after fetching a quote.
+                                Selector from quote: {entrypointSelector || '0x...'}
                             </p>
                         </div>
 
@@ -275,7 +381,7 @@ export default function DepositPage() {
                         </button>
 
                         <p className="text-xs text-gray-400 text-center mt-4">
-                            Open browser console (F12) for detailed logs
+                            Open console for detailed logs
                         </p>
                     </>
                 ) : (

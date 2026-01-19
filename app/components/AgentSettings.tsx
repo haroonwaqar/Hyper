@@ -41,7 +41,11 @@ export default function AgentSettings({ onClose }: AgentSettingsProps) {
 
         setStopping(true);
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+            const apiUrl =
+                process.env.NEXT_PUBLIC_API_URL ||
+                (process.env.NODE_ENV === 'production'
+                    ? 'https://hyper-production-72e8.up.railway.app'
+                    : 'http://localhost:3001');
             const response = await fetch(`${apiUrl}/agent/stop`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -82,7 +86,11 @@ export default function AgentSettings({ onClose }: AgentSettingsProps) {
                 leverage: selectedStrategy === 'Aggressive' ? 3 : 1,
             };
 
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+            const apiUrl =
+                process.env.NEXT_PUBLIC_API_URL ||
+                (process.env.NODE_ENV === 'production'
+                    ? 'https://hyper-production-72e8.up.railway.app'
+                    : 'http://localhost:3001');
             const response = await fetch(`${apiUrl}/agent/strategy`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

@@ -28,6 +28,7 @@ export default function DashboardPage() {
         hasAgent,
         worldChainBalance,
         hyperliquidBalance,
+        arbUsdcBalance,
         refreshBalances,
     } = useApp();
 
@@ -55,7 +56,7 @@ export default function DashboardPage() {
 
         try {
             setPortfolioLoading(true);
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
             const response = await fetch(`${apiUrl}/user/portfolio?walletAddress=${userAddress}`);
             const data = await response.json();
 
@@ -71,7 +72,7 @@ export default function DashboardPage() {
 
     async function fetchPriceHistory() {
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
             const response = await fetch(`${apiUrl}/user/price-history?coin=ETH&interval=1h&limit=24`);
             const data = await response.json();
 
@@ -198,6 +199,11 @@ export default function DashboardPage() {
                                 <div>
                                     <p className="text-sm text-gray-400">Agent Status</p>
                                     <p className="font-semibold">{agent.config.risk} Strategy</p>
+                                    {arbUsdcBalance && parseFloat(arbUsdcBalance) > 0 && (!hyperliquidBalance || parseFloat(hyperliquidBalance) === 0) && (
+                                        <p className="text-xs text-yellow-500 mt-1">
+                                            ${parseFloat(arbUsdcBalance).toFixed(2)} USDC on Arbitrum (pending Hyperliquid credit)
+                                        </p>
+                                    )}
                                 </div>
                                 <div className="flex items-center gap-2">
                                     {agent.isActive && <span className="status-dot active"></span>}
