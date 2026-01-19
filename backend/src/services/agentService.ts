@@ -3,6 +3,9 @@ import { ethers } from 'ethers';
 import { encrypt, decrypt } from '../utils/encryption.js';
 import { InfoClient, ExchangeClient, HttpTransport } from '@nktkas/hyperliquid';
 
+const ARBITRUM_RPC = 'https://arb1.arbitrum.io/rpc';
+const ARBITRUM_USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
+
 export class AgentService {
     /**
      * Creates a new agent for a user if one doesn't exist.
@@ -238,12 +241,28 @@ export class AgentService {
             }
         }
 
+        // Also check Arbitrum USDC balance to detect funds that haven't been credited to Hyperliquid yet.
+        let arbUsdcBalance = '0';
+        try {
+            const provider = new ethers.JsonRpcProvider(ARBITRUM_RPC);
+            const usdc = new ethers.Contract(
+                ARBITRUM_USDC,
+                ['function balanceOf(address account) view returns (uint256)'],
+                provider
+            ) as any;
+            const raw = await usdc.balanceOf(agent.walletAddress);
+            arbUsdcBalance = ethers.formatUnits(raw, 6);
+        } catch (error) {
+            console.error('Error fetching Arbitrum USDC balance:', error);
+        }
+
         return {
             id: agent.id,
             address: agent.walletAddress,
             isActive: agent.isActive,
             config: JSON.parse(agent.strategyConfig),
             usdcBalance,
+            arbUsdcBalance,
         };
     }
 

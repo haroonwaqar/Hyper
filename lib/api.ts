@@ -33,6 +33,7 @@ export interface AgentStatus {
         leverage: number;
     };
     usdcBalance: string;
+    arbUsdcBalance?: string;
 }
 
 export interface GetAgentStatusResponse {
