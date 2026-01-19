@@ -27,6 +27,7 @@ export declare class AgentService {
         isActive: boolean;
         config: any;
         usdcBalance: string;
+        arbUsdcBalance: string;
     } | null>;
     /**
      * Helper to initialize Hyperliquid ExchangeClient with the agent's private key.

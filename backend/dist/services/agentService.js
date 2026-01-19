@@ -2,6 +2,8 @@ import { prisma } from '../db.js';
 import { ethers } from 'ethers';
 import { encrypt, decrypt } from '../utils/encryption.js';
 import { InfoClient, ExchangeClient, HttpTransport } from '@nktkas/hyperliquid';
+const ARBITRUM_RPC = 'https://arb1.arbitrum.io/rpc';
+const ARBITRUM_USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 export class AgentService {
     /**
      * Creates a new agent for a user if one doesn't exist.
@@ -189,16 +191,39 @@ export class AgentService {
         // Initialize InfoClient for reading state
         const transport = new HttpTransport(); // Defaults to Mainnet
         const infoClient = new InfoClient({ transport });
-        // Fetch USDC Balance (Spot)
+        // Fetch account value from perp clearinghouse (deposits land here).
         let usdcBalance = '0';
         try {
-            const state = await infoClient.spotClearinghouseState({ user: agent.walletAddress });
-            const usdc = state.balances.find((b) => b.coin === 'USDC');
-            usdcBalance = usdc ? usdc.total : '0';
+            const clearinghouse = await infoClient.clearinghouseState({ user: agent.walletAddress });
+            const accountValue = clearinghouse?.marginSummary?.accountValue;
+            if (accountValue != null) {
+                usdcBalance = String(accountValue);
+            }
         }
         catch (error) {
-            console.error('Error fetching HL state:', error);
-            // It's possible the address has no state on Hyperliquid yet
+            console.error('Error fetching HL clearinghouse state:', error);
+        }
+        // Fallback: spot USDC balance (may be zero even after deposit).
+        if (!usdcBalance || usdcBalance === '0') {
+            try {
+                const spot = await infoClient.spotClearinghouseState({ user: agent.walletAddress });
+                const usdc = spot.balances.find((b) => b.coin === 'USDC');
+                usdcBalance = usdc ? usdc.total : '0';
+            }
+            catch (error) {
+                console.error('Error fetching HL spot state:', error);
+            }
+        }
+        // Also check Arbitrum USDC balance to detect funds that haven't been credited to Hyperliquid yet.
+        let arbUsdcBalance = '0';
+        try {
+            const provider = new ethers.JsonRpcProvider(ARBITRUM_RPC);
+            const usdc = new ethers.Contract(ARBITRUM_USDC, ['function balanceOf(address account) view returns (uint256)'], provider);
+            const raw = await usdc.balanceOf(agent.walletAddress);
+            arbUsdcBalance = ethers.formatUnits(raw, 6);
+        }
+        catch (error) {
+            console.error('Error fetching Arbitrum USDC balance:', error);
         }
         return {
             id: agent.id,
@@ -206,6 +231,7 @@ export class AgentService {
             isActive: agent.isActive,
             config: JSON.parse(agent.strategyConfig),
             usdcBalance,
+            arbUsdcBalance,
         };
     }
     /**

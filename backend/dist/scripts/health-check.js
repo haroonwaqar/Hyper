@@ -144,15 +144,53 @@ async function checkHyperliquidConnectivity() {
             result.details.ethPrice = ethPrice;
             logSuccess(`ETH Price: $${parseFloat(ethPrice).toFixed(2)}`);
         }
-        // Test 3: Get funding rate
-        const metaAndAssetCtxs = await infoClient.metaAndAssetCtxs();
-        const ethAsset = metaAndAssetCtxs[0]?.universe?.find((u) => u.name === 'ETH');
-        if (ethAsset && 'funding' in ethAsset) {
-            const fundingRate = parseFloat(ethAsset.funding || '0');
-            result.details.fundingRate = fundingRate;
-            logSuccess(`ETH Funding Rate: ${(fundingRate * 100).toFixed(4)}%`);
+        // Test 3: Get funding rate (using same logic as engine)
+        try {
+            const metaAndAssetCtxs = await infoClient.metaAndAssetCtxs();
+            const universe = metaAndAssetCtxs[0]?.universe;
+            if (universe) {
+                const ethAsset = universe.find((u) => u.name === 'ETH');
+                if (ethAsset && 'funding' in ethAsset) {
+                    const fundingRate = parseFloat(ethAsset.funding || '0');
+                    result.details.fundingRate = fundingRate;
+                    logSuccess(`ETH Funding Rate: ${(fundingRate * 100).toFixed(4)}%`);
+                }
+                else {
+                    // Try fundingHistory as fallback
+                    try {
+                        const history = await infoClient.fundingHistory({
+                            coin: 'ETH',
+                            startTime: Date.now() - (24 * 60 * 60 * 1000),
+                        });
+                        if (history && history.length > 0) {
+                            const latestFunding = history[history.length - 1];
+                            if (latestFunding && 'fundingRate' in latestFunding) {
+                                const fundingRate = parseFloat(latestFunding.fundingRate);
+                                result.details.fundingRate = fundingRate;
+                                logSuccess(`ETH Funding Rate (history): ${(fundingRate * 100).toFixed(4)}%`);
+                            }
+                            else {
+                                result.warnings.push('Could not fetch funding rate');
+                                logWarning('Funding rate unavailable');
+                            }
+                        }
+                        else {
+                            result.warnings.push('Could not fetch funding rate');
+                            logWarning('Funding rate unavailable');
+                        }
+                    }
+                    catch (histError) {
+                        result.warnings.push('Could not fetch funding rate');
+                        logWarning('Funding rate unavailable');
+                    }
+                }
+            }
+            else {
+                result.warnings.push('Could not fetch funding rate');
+                logWarning('Funding rate unavailable');
+            }
         }
-        else {
+        catch (error) {
             result.warnings.push('Could not fetch funding rate');
             logWarning('Funding rate unavailable');
         }

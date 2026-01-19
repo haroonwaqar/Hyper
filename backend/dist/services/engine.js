@@ -8,8 +8,8 @@ export class TradingEngine {
     intervalId = null;
     isRunning = false;
     infoClient;
-    FUNDING_THRESHOLD = 0.001; // 0.1% (expressed as 0.001)
-    MIN_BALANCE = 10; // 10 USDC minimum
+    FUNDING_THRESHOLD = 0.00001; // 0.001% (expressed as 0.00001)
+    MIN_BALANCE = 5; // 5 USDC minimum
     LOOP_INTERVAL = 60000; // 60 seconds
     constructor() {
         const transport = new HttpTransport();
@@ -179,12 +179,12 @@ export class TradingEngine {
             // Initialize ExchangeClient for this agent
             const transport = new HttpTransport();
             const exchangeClient = new ExchangeClient({ transport, wallet });
-            // Check balance
-            const state = await this.infoClient.spotClearinghouseState({
+            // Check balance (perp clearinghouse account value holds deposits)
+            const clearinghouse = await this.infoClient.clearinghouseState({
                 user: agent.walletAddress
             });
-            const usdcBalance = state.balances.find((b) => b.coin === 'USDC');
-            const balance = usdcBalance ? parseFloat(usdcBalance.total) : 0;
+            const accountValue = clearinghouse?.marginSummary?.accountValue;
+            const balance = accountValue ? parseFloat(accountValue) : 0;
             console.log(`[Engine] 💰 Agent balance: ${balance.toFixed(2)} USDC`);
             if (balance < this.MIN_BALANCE) {
                 console.log(`[Engine] ⏭️  Insufficient balance (min: ${this.MIN_BALANCE} USDC)`);
