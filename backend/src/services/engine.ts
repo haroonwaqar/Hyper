@@ -270,7 +270,13 @@ export class TradingEngine {
         console.log(`[Engine] 📉 Executing CONSERVATIVE strategy (funding arbitrage)...`);
 
         const marketPrice = await this.getMarketPrice('ETH');
-        if (!marketPrice || !marketPrice.priceStr || !Number.isFinite(marketPrice.price) || marketPrice.price <= 0) {
+        if (
+            !marketPrice ||
+            marketPrice.assetIndex == null ||
+            !marketPrice.priceStr ||
+            !Number.isFinite(marketPrice.price) ||
+            marketPrice.price <= 0
+        ) {
             console.log('[Engine] ⚠️  Unable to fetch ETH price, skipping');
             return;
         }
@@ -300,7 +306,7 @@ export class TradingEngine {
         const order = await exchangeClient.order({
             orders: [
                 {
-                    a: 0, // Asset index for ETH
+                    a: marketPrice.assetIndex, // Asset index for ETH
                     b: false, // is_buy = false (SHORT)
                     p: orderPriceStr,
                     s: positionSize, // Size
@@ -371,7 +377,13 @@ export class TradingEngine {
         }
 
         const marketPrice = await this.getMarketPrice('ETH');
-        if (!marketPrice || !marketPrice.priceStr || !Number.isFinite(marketPrice.price) || marketPrice.price <= 0) {
+        if (
+            !marketPrice ||
+            marketPrice.assetIndex == null ||
+            !marketPrice.priceStr ||
+            !Number.isFinite(marketPrice.price) ||
+            marketPrice.price <= 0
+        ) {
             console.log('[Engine] ⚠️  Unable to fetch ETH price, skipping');
             return;
         }
@@ -403,7 +415,7 @@ export class TradingEngine {
         const order = await exchangeClient.order({
             orders: [
                 {
-                    a: 0, // ETH
+                    a: marketPrice.assetIndex, // ETH
                     b: direction === 'LONG', // is_buy
                     p: orderPriceStr,
                     s: positionSize,
@@ -430,7 +442,9 @@ export class TradingEngine {
         };
     }
 
-    private async getMarketPrice(coin: string): Promise<{ price: number; priceStr: string } | null> {
+    private async getMarketPrice(
+        coin: string
+    ): Promise<{ price: number; priceStr: string; assetIndex: number } | null> {
         try {
             const [meta, assetCtxs] = await this.infoClient.metaAndAssetCtxs();
             const universe = meta?.universe || [];
@@ -441,7 +455,7 @@ export class TradingEngine {
             if (!priceStr) return null;
             const price = parseFloat(priceStr);
             if (!Number.isFinite(price)) return null;
-            return { price, priceStr };
+            return { price, priceStr, assetIndex };
         } catch (error) {
             console.warn('[Engine] ⚠️  Failed to fetch market price:', error);
             return null;
