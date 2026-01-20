@@ -10,7 +10,7 @@ export class TradingEngine {
     private intervalId: NodeJS.Timeout | null = null;
     private isRunning: boolean = false;
     private infoClient: InfoClient;
-    private readonly FUNDING_THRESHOLD = 0.00001; // 0.001% (expressed as 0.00001)
+    private readonly FUNDING_THRESHOLD = 0; // Always trade when balance is sufficient
     private readonly MIN_BALANCE = 5; // 5 USDC minimum
     private readonly LOOP_INTERVAL = 60000; // 60 seconds
 
