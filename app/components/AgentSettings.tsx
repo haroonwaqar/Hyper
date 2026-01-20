@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { useRouter } from 'next/navigation';
+import { API_BASE_URL } from '@/lib/api';
 
 interface AgentSettingsProps {
     onClose: () => void;
@@ -12,6 +13,15 @@ export default function AgentSettings({ onClose }: AgentSettingsProps) {
     const { agent, userAddress, refreshAgent } = useApp();
     const router = useRouter();
     const [stopping, setStopping] = useState(false);
+    const [starting, setStarting] = useState(false);
+    useEffect(() => {
+        const prev = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            document.body.style.overflow = prev;
+        };
+    }, []);
+
     const [switching, setSwitching] = useState(false);
     const [selectedStrategy, setSelectedStrategy] = useState(agent?.config.risk || 'Conservative');
 
@@ -41,12 +51,7 @@ export default function AgentSettings({ onClose }: AgentSettingsProps) {
 
         setStopping(true);
         try {
-            const apiUrl =
-                process.env.NEXT_PUBLIC_API_URL ||
-                (process.env.NODE_ENV === 'production'
-                    ? 'https://hyper-production-72e8.up.railway.app'
-                    : 'http://localhost:3001');
-            const response = await fetch(`${apiUrl}/agent/stop`, {
+            const response = await fetch(`${API_BASE_URL}/agent/stop`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ worldWalletAddress: userAddress }),
@@ -69,6 +74,32 @@ export default function AgentSettings({ onClose }: AgentSettingsProps) {
         }
     }
 
+    async function handleStartAgent() {
+        if (!confirm('Start agent?')) return;
+        setStarting(true);
+        try {
+            const response = await fetch(`${API_BASE_URL}/agent/start`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ worldWalletAddress: userAddress }),
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                await refreshAgent();
+                alert('Agent started!');
+                onClose();
+            } else {
+                throw new Error(data.error || 'Failed to start agent');
+            }
+        } catch (error) {
+            console.error('Start agent error:', error);
+            alert(error instanceof Error ? error.message : 'Failed to start agent');
+        } finally {
+            setStarting(false);
+        }
+    }
+
     async function handleSwitchStrategy() {
         if (!agent) return;
 
@@ -86,12 +117,7 @@ export default function AgentSettings({ onClose }: AgentSettingsProps) {
                 leverage: selectedStrategy === 'Aggressive' ? 3 : 1,
             };
 
-            const apiUrl =
-                process.env.NEXT_PUBLIC_API_URL ||
-                (process.env.NODE_ENV === 'production'
-                    ? 'https://hyper-production-72e8.up.railway.app'
-                    : 'http://localhost:3001');
-            const response = await fetch(`${apiUrl}/agent/strategy`, {
+            const response = await fetch(`${API_BASE_URL}/agent/strategy`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -123,8 +149,8 @@ export default function AgentSettings({ onClose }: AgentSettingsProps) {
     }
 
     return (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-end sm:items-center justify-center p-4">
-            <div className="bg-[var(--bg-card)] rounded-t-2xl sm:rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+            <div className="bg-[var(--bg-card)] rounded-t-2xl sm:rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
                 {/* Header */}
                 <div className="sticky top-0 bg-[var(--bg-card)] border-b border-[var(--border-color)] p-4 flex items-center justify-between">
                     <h2 className="text-lg font-semibold">Agent Settings</h2>
@@ -202,13 +228,21 @@ export default function AgentSettings({ onClose }: AgentSettingsProps) {
                             💰 Withdraw Funds
                         </button>
 
-                        {agent.isActive && (
+                        {agent.isActive ? (
                             <button
                                 onClick={handleStopAgent}
                                 disabled={stopping}
                                 className="w-full py-3 px-4 rounded-lg bg-red-500/10 border-2 border-red-500 text-red-500 font-semibold hover:bg-red-500/20 transition-colors disabled:opacity-50"
                             >
                                 {stopping ? 'Stopping...' : '🛑 Stop Agent & Close Positions'}
+                            </button>
+                        ) : (
+                            <button
+                                onClick={handleStartAgent}
+                                disabled={starting}
+                                className="w-full py-3 px-4 rounded-lg bg-green-500/10 border-2 border-green-500 text-green-500 font-semibold hover:bg-green-500/20 transition-colors disabled:opacity-50"
+                            >
+                                {starting ? 'Starting...' : '▶️ Start Agent'}
                             </button>
                         )}
                     </div>

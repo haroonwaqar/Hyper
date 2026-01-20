@@ -5,7 +5,7 @@
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { MiniKit } from '@worldcoin/minikit-js';
-import { createAgent, getAgentStatus, updateStrategy, type AgentStatus } from '@/lib/api';
+import { createAgent, getAgentStatus, updateStrategy, type AgentStatus, API_BASE_URL } from '@/lib/api';
 
 interface AppContextType {
     // User & Auth
@@ -60,19 +60,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, [isAuthenticated, userAddress]);
 
     async function testAPIConnection() {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-        console.log('🔍 Testing API connection to:', apiUrl);
+        console.log('🔍 Testing API connection to:', API_BASE_URL);
 
         try {
-            const response = await fetch(`${apiUrl}/health`);
+            const response = await fetch(`${API_BASE_URL}/health`);
             const data = await response.json();
             console.log('✅ Backend is reachable:', data);
         } catch (error) {
             console.error('❌ Backend connection failed!');
-            console.error('   API URL:', apiUrl);
+            console.error('   API URL:', API_BASE_URL);
             console.error('   Error:', error);
-            console.error('   → Make sure backend is running on port 3001');
-            console.error('   → Check .env.local has NEXT_PUBLIC_API_URL=http://localhost:3001');
+            console.error('   → Check NEXT_PUBLIC_API_URL if this is not expected');
         }
     }
 

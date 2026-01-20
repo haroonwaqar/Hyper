@@ -194,6 +194,38 @@ export class AgentService {
     }
 
     /**
+     * Starts (reactivates) an agent.
+     */
+    static async startAgent(worldWalletAddress: string) {
+        console.log('[AgentService] ▶️ startAgent called for:', worldWalletAddress);
+
+        const user = await prisma.user.findUnique({
+            where: { worldWalletAddress },
+        });
+
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        const agent = await prisma.agent.findUnique({
+            where: { userId: user.id },
+        });
+
+        if (!agent) {
+            throw new Error('Agent not found');
+        }
+
+        await prisma.agent.update({
+            where: { id: agent.id },
+            data: { isActive: true },
+        });
+
+        console.log('[AgentService] ✅ Agent started');
+
+        return { status: 'started' };
+    }
+
+    /**
      * Retrieves agent status and checks on-chain balance via Hyperliquid SDK.
      */
     static async getAgentStatus(worldWalletAddress: string) {

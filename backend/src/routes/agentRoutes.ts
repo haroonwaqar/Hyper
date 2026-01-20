@@ -95,6 +95,33 @@ router.post('/stop', async (req: Request, res: Response): Promise<void> => {
     }
 });
 
+// POST /agent/start - Reactivate agent
+router.post('/start', async (req: Request, res: Response): Promise<void> => {
+    try {
+        console.log('[Route] ▶️ Start agent request:', req.body);
+        const { worldWalletAddress } = req.body;
+
+        if (!worldWalletAddress) {
+            res.status(400).json({ error: 'worldWalletAddress is required' });
+            return;
+        }
+
+        const result = await AgentService.startAgent(worldWalletAddress);
+        console.log('[Route] ✅ Agent started:', result);
+
+        res.json({
+            success: true,
+            ...result,
+        });
+    } catch (error) {
+        console.error('[Route] ❌ Error starting agent:', error);
+        res.status(500).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Failed to start agent'
+        });
+    }
+});
+
 // POST /agent/strategy - Update agent strategy
 router.post('/strategy', async (req: Request, res: Response): Promise<void> => {
     try {

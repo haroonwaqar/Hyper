@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useApp } from '../context/AppContext';
+import { API_BASE_URL } from '@/lib/api';
 import AgentSettings from '../components/AgentSettings';
 
 interface Portfolio {
@@ -36,6 +37,7 @@ export default function DashboardPage() {
     const [portfolioLoading, setPortfolioLoading] = useState(false);
     const [priceData, setPriceData] = useState<any[]>([]);
     const [showSettings, setShowSettings] = useState(false);
+    const [togglingAgent, setTogglingAgent] = useState(false);
 
     // Fetch portfolio data
     useEffect(() => {
@@ -56,8 +58,7 @@ export default function DashboardPage() {
 
         try {
             setPortfolioLoading(true);
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-            const response = await fetch(`${apiUrl}/user/portfolio?walletAddress=${userAddress}`);
+            const response = await fetch(`${API_BASE_URL}/user/portfolio?walletAddress=${userAddress}`);
             const data = await response.json();
 
             if (data.success && data.hasAgent) {
@@ -70,10 +71,33 @@ export default function DashboardPage() {
         }
     }
 
+    async function handleToggleAgent() {
+        if (!userAddress) return;
+        if (!agent) return;
+        setTogglingAgent(true);
+        try {
+            const endpoint = agent.isActive ? '/agent/stop' : '/agent/start';
+            const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ worldWalletAddress: userAddress }),
+            });
+            const data = await response.json();
+            if (!data.success) {
+                throw new Error(data.error || 'Failed to update agent status');
+            }
+            await refreshBalances();
+        } catch (error) {
+            console.error('Toggle agent error:', error);
+            alert(error instanceof Error ? error.message : 'Failed to update agent status');
+        } finally {
+            setTogglingAgent(false);
+        }
+    }
+
     async function fetchPriceHistory() {
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-            const response = await fetch(`${apiUrl}/user/price-history?coin=ETH&interval=1h&limit=24`);
+            const response = await fetch(`${API_BASE_URL}/user/price-history?coin=ETH&interval=1h&limit=24`);
             const data = await response.json();
 
             if (data.success) {
@@ -199,6 +223,9 @@ export default function DashboardPage() {
                                 <div>
                                     <p className="text-sm text-gray-400">Agent Status</p>
                                     <p className="font-semibold">{agent.config.risk} Strategy</p>
+                                    <p className="text-xs text-gray-400 mt-1">
+                                        Balance: ${parseFloat(hyperliquidBalance || '0').toFixed(2)} · PnL: ${portfolio?.totalUnrealizedPnl?.toFixed(2) ?? '0.00'}
+                                    </p>
                                     {arbUsdcBalance && parseFloat(arbUsdcBalance) > 0 && (!hyperliquidBalance || parseFloat(hyperliquidBalance) === 0) && (
                                         <p className="text-xs text-yellow-500 mt-1">
                                             ${parseFloat(arbUsdcBalance).toFixed(2)} USDC on Arbitrum (pending Hyperliquid credit)
@@ -213,12 +240,19 @@ export default function DashboardPage() {
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className="grid grid-cols-3 gap-3">
                                 <button
                                     onClick={() => setShowSettings(true)}
                                     className="btn btn-secondary"
                                 >
                                     ⚙️ Configure
+                                </button>
+                                <button
+                                    onClick={handleToggleAgent}
+                                    disabled={togglingAgent}
+                                    className={`btn ${agent.isActive ? 'btn-secondary' : 'btn-primary'}`}
+                                >
+                                    {togglingAgent ? 'Updating...' : agent.isActive ? '⏸ Stop' : '▶️ Start'}
                                 </button>
                                 <Link href="/deposit" className="btn btn-primary">
                                     Add Funds

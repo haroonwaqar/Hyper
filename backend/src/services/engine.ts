@@ -68,6 +68,9 @@ export class TradingEngine {
 
             console.log(`[Engine] 📈 Current ETH funding rate: ${(fundingRate * 100).toFixed(4)}%`);
 
+            // Exit logic runs every loop.
+            await this.handleExitLogic(fundingRate);
+
             // Check if funding is above threshold (positive = shorts get paid)
             if (fundingRate <= this.FUNDING_THRESHOLD) {
                 console.log(`[Engine] ⏭️  Funding too low (threshold: ${(this.FUNDING_THRESHOLD * 100).toFixed(4)}%), skipping cycle`);
@@ -256,6 +259,84 @@ export class TradingEngine {
         } catch (error) {
             console.error(`[Engine] ❌ Error executing strategy for agent ${agent.id}:`, error);
             // Continue to next agent even if this one fails
+        }
+    }
+
+    private async handleExitLogic(fundingRate: number) {
+        try {
+            const agents = await prisma.agent.findMany();
+            if (agents.length === 0) return;
+
+            for (const agent of agents) {
+                const positions = await this.infoClient.clearinghouseState({
+                    user: agent.walletAddress
+                });
+
+                const openPositions = positions.assetPositions?.filter(
+                    (p: any) => parseFloat(p.position.szi) !== 0
+                ) || [];
+
+                if (openPositions.length === 0) continue;
+
+                if (fundingRate < 0) {
+                    console.log(`[Engine] 🛑 Closing position: Funding went negative (${(fundingRate * 100).toFixed(4)}%)`);
+                    await this.closeAllPositions(agent, openPositions);
+                    continue;
+                }
+
+                if (!agent.isActive) {
+                    console.log('[Engine] 🛑 Closing position: Agent is inactive');
+                    await this.closeAllPositions(agent, openPositions);
+                }
+            }
+        } catch (error) {
+            console.error('[Engine] ❌ Error in exit logic:', error);
+        }
+    }
+
+    private async closeAllPositions(
+        agent: { walletAddress: string; encryptedPrivateKey: string },
+        openPositions: any[]
+    ) {
+        const privateKey = decrypt(agent.encryptedPrivateKey);
+        const wallet = new ethers.Wallet(privateKey);
+        const transport = new HttpTransport();
+        const exchangeClient = new ExchangeClient({ transport, wallet });
+
+        for (const pos of openPositions) {
+            try {
+                const coin = pos.position.coin as string;
+                const size = Math.abs(parseFloat(pos.position.szi));
+                if (!Number.isFinite(size) || size <= 0) continue;
+
+                const marketPrice = await this.getMarketPrice(coin);
+                if (!marketPrice || !marketPrice.priceStr) {
+                    console.log(`[Engine] ⚠️  Unable to fetch price for ${coin}, skipping close`);
+                    continue;
+                }
+
+                const priceTick = this.getPriceTick(coin);
+                const orderPrice = this.roundToTick(marketPrice.price, priceTick);
+                const orderPriceStr = this.formatDecimal(orderPrice, this.tickToDecimals(priceTick));
+
+                await exchangeClient.order({
+                    orders: [
+                        {
+                            a: marketPrice.assetIndex,
+                            b: parseFloat(pos.position.szi) < 0, // close short -> buy, close long -> sell
+                            p: orderPriceStr,
+                            s: size.toString(),
+                            r: true,
+                            t: { limit: { tif: 'FrontendMarket' } },
+                        }
+                    ],
+                    grouping: 'na',
+                });
+
+                console.log(`[Engine] ✅ Closed ${coin} position (${size.toString()})`);
+            } catch (error) {
+                console.error(`[Engine] ❌ Failed to close position for ${pos.position.coin}:`, error);
+            }
         }
     }
 
