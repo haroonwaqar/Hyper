@@ -269,15 +269,15 @@ export class TradingEngine {
     ) {
         console.log(`[Engine] 📉 Executing CONSERVATIVE strategy (funding arbitrage)...`);
 
-        const midPrice = await this.getMidPrice('ETH');
-        if (!Number.isFinite(midPrice) || midPrice <= 0) {
+        const marketPrice = await this.getMarketPrice('ETH');
+        if (!marketPrice || !marketPrice.priceStr || !Number.isFinite(marketPrice.price) || marketPrice.price <= 0) {
             console.log('[Engine] ⚠️  Unable to fetch ETH price, skipping');
             return;
         }
 
         // Use 90% of balance as notional, convert to ETH size.
         const notionalUsd = balance * 0.9 * leverage;
-        const sizeEth = notionalUsd / midPrice;
+        const sizeEth = notionalUsd / marketPrice.price;
         const sizeDecimals = await this.getSizeDecimals('ETH');
         const positionSize = this.formatDecimal(sizeEth, sizeDecimals);
 
@@ -286,14 +286,14 @@ export class TradingEngine {
             return;
         }
 
-        const priceDecimals = this.getPriceDecimals('ETH');
-        const orderPrice = parseFloat(this.formatDecimal(midPrice, priceDecimals));
+        const orderPriceStr = marketPrice.priceStr;
+        const orderPrice = parseFloat(orderPriceStr);
 
         if (!Number.isFinite(orderPrice) || orderPrice <= 0) {
             console.log('[Engine] ⚠️  Invalid order price, skipping');
             return;
         }
-        console.log(`[Engine] 🧮 midPx=${midPrice.toFixed(4)} price=${orderPrice} size=${positionSize}`);
+        console.log(`[Engine] 🧮 midPx=${marketPrice.priceStr} price=${orderPriceStr} size=${positionSize}`);
 
         // Place market SHORT order (to receive funding)
         const order = await exchangeClient.order({
@@ -301,7 +301,7 @@ export class TradingEngine {
                 {
                     a: 0, // Asset index for ETH
                     b: false, // is_buy = false (SHORT)
-                    p: orderPrice.toString(),
+                    p: orderPriceStr,
                     s: positionSize, // Size
                     r: false, // reduce_only
                     t: { limit: { tif: 'FrontendMarket' } }, // Market-style
@@ -369,15 +369,15 @@ export class TradingEngine {
             return;
         }
 
-        const midPrice = await this.getMidPrice('ETH');
-        if (!Number.isFinite(midPrice) || midPrice <= 0) {
+        const marketPrice = await this.getMarketPrice('ETH');
+        if (!marketPrice || !marketPrice.priceStr || !Number.isFinite(marketPrice.price) || marketPrice.price <= 0) {
             console.log('[Engine] ⚠️  Unable to fetch ETH price, skipping');
             return;
         }
 
         // 4. Calculate position size with leverage (USD -> ETH)
         const notionalUsd = balance * 0.9 * leverage;
-        const sizeEth = notionalUsd / midPrice;
+        const sizeEth = notionalUsd / marketPrice.price;
         const sizeDecimals = await this.getSizeDecimals('ETH');
         const positionSize = this.formatDecimal(sizeEth, sizeDecimals);
 
@@ -388,14 +388,14 @@ export class TradingEngine {
 
         console.log(`[Engine] 💰 Position size: ${positionSize} ETH (~$${notionalUsd.toFixed(2)})`);
 
-        const priceDecimals = this.getPriceDecimals('ETH');
-        const orderPrice = parseFloat(this.formatDecimal(midPrice, priceDecimals));
+        const orderPriceStr = marketPrice.priceStr;
+        const orderPrice = parseFloat(orderPriceStr);
 
         if (!Number.isFinite(orderPrice) || orderPrice <= 0) {
             console.log('[Engine] ⚠️  Invalid order price, skipping');
             return;
         }
-        console.log(`[Engine] 🧮 midPx=${midPrice.toFixed(4)} price=${orderPrice} size=${positionSize}`);
+        console.log(`[Engine] 🧮 midPx=${marketPrice.priceStr} price=${orderPriceStr} size=${positionSize}`);
 
         // 5. Place market order
         const order = await exchangeClient.order({
@@ -403,7 +403,7 @@ export class TradingEngine {
                 {
                     a: 0, // ETH
                     b: direction === 'LONG', // is_buy
-                    p: orderPrice.toString(),
+                    p: orderPriceStr,
                     s: positionSize,
                     r: false, // not reduce_only
                     t: { limit: { tif: 'FrontendMarket' } },
@@ -428,16 +428,21 @@ export class TradingEngine {
         };
     }
 
-    private async getMidPrice(coin: string): Promise<number> {
+    private async getMarketPrice(coin: string): Promise<{ price: number; priceStr: string } | null> {
         try {
-            const mids = await this.infoClient.allMids();
-            const price = mids?.[coin];
-            if (!price) return 0;
-            const parsed = parseFloat(price);
-            return Number.isFinite(parsed) ? parsed : 0;
+            const [meta, assetCtxs] = await this.infoClient.metaAndAssetCtxs();
+            const universe = meta?.universe || [];
+            const assetIndex = universe.findIndex((u: any) => u.name === coin);
+            if (assetIndex < 0) return null;
+            const ctx = assetCtxs?.[assetIndex];
+            const priceStr = (ctx?.midPx ?? ctx?.markPx ?? '').toString();
+            if (!priceStr) return null;
+            const price = parseFloat(priceStr);
+            if (!Number.isFinite(price)) return null;
+            return { price, priceStr };
         } catch (error) {
-            console.warn('[Engine] ⚠️  Failed to fetch mid price:', error);
-            return 0;
+            console.warn('[Engine] ⚠️  Failed to fetch market price:', error);
+            return null;
         }
     }
 
@@ -452,11 +457,6 @@ export class TradingEngine {
             console.warn('[Engine] ⚠️  Failed to fetch size decimals:', error);
             return 6;
         }
-    }
-
-    private getPriceDecimals(coin: string): number {
-        if (coin === 'ETH') return 2;
-        return 4;
     }
 
     private formatDecimal(value: number, decimals: number): string {

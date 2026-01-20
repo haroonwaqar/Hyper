@@ -11,7 +11,7 @@ function sanitizeURL(baseUrl: string, endpoint: string): string {
     return `${cleanBase}/${cleanEndpoint}`;
 }
 
-const API_BASE_URL =
+export const API_BASE_URL =
     process.env.NEXT_PUBLIC_API_URL ||
     (process.env.NODE_ENV === 'production'
         ? 'https://hyper-production-72e8.up.railway.app'
