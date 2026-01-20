@@ -285,13 +285,21 @@ export class TradingEngine {
             return;
         }
 
+        const priceTick = await this.getPriceTickSize('ETH');
+        const orderPrice = this.roundToTick(midPrice, priceTick);
+
+        if (orderPrice <= 0) {
+            console.log('[Engine] ⚠️  Invalid order price, skipping');
+            return;
+        }
+
         // Place market SHORT order (to receive funding)
         const order = await exchangeClient.order({
             orders: [
                 {
                     a: 0, // Asset index for ETH
                     b: false, // is_buy = false (SHORT)
-                    p: midPrice.toFixed(2), // Use current mid price for validation
+                    p: orderPrice.toString(), // Must be on tick size
                     s: positionSize, // Size
                     r: false, // reduce_only
                     t: { limit: { tif: 'Ioc' } }, // Immediate or Cancel
@@ -377,13 +385,21 @@ export class TradingEngine {
 
         console.log(`[Engine] 💰 Position size: ${positionSize} ETH (~$${notionalUsd.toFixed(2)})`);
 
+        const priceTick = await this.getPriceTickSize('ETH');
+        const orderPrice = this.roundToTick(midPrice, priceTick);
+
+        if (orderPrice <= 0) {
+            console.log('[Engine] ⚠️  Invalid order price, skipping');
+            return;
+        }
+
         // 5. Place market order
         const order = await exchangeClient.order({
             orders: [
                 {
                     a: 0, // ETH
                     b: direction === 'LONG', // is_buy
-                    p: midPrice.toFixed(2), // Use current mid price for validation
+                    p: orderPrice.toString(), // Must be on tick size
                     s: positionSize,
                     r: false, // not reduce_only
                     t: { limit: { tif: 'Ioc' } },
@@ -418,5 +434,23 @@ export class TradingEngine {
             console.warn('[Engine] ⚠️  Failed to fetch mid price:', error);
             return 0;
         }
+    }
+
+    private async getPriceTickSize(coin: string): Promise<number> {
+        try {
+            const metaAndAssetCtxs = await this.infoClient.metaAndAssetCtxs();
+            const universe = metaAndAssetCtxs[0]?.universe || [];
+            const asset = universe.find((u: any) => u.name === coin);
+            if (!asset || typeof asset?.szDecimals !== 'number') return 0.01;
+            return Math.pow(10, -asset.szDecimals);
+        } catch (error) {
+            console.warn('[Engine] ⚠️  Failed to fetch tick size:', error);
+            return 0.01;
+        }
+    }
+
+    private roundToTick(price: number, tick: number): number {
+        if (!tick || tick <= 0) return Math.floor(price);
+        return Math.floor(price / tick) * tick;
     }
 }
