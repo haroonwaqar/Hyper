@@ -286,8 +286,9 @@ export class TradingEngine {
             return;
         }
 
-        const orderPriceStr = marketPrice.priceStr;
-        const orderPrice = parseFloat(orderPriceStr);
+        const priceTick = this.getPriceTick('ETH');
+        const orderPrice = this.roundToTick(marketPrice.price, priceTick);
+        const orderPriceStr = this.formatDecimal(orderPrice, this.tickToDecimals(priceTick));
 
         if (!Number.isFinite(orderPrice) || orderPrice <= 0) {
             console.log('[Engine] ⚠️  Invalid order price, skipping');
@@ -388,8 +389,9 @@ export class TradingEngine {
 
         console.log(`[Engine] 💰 Position size: ${positionSize} ETH (~$${notionalUsd.toFixed(2)})`);
 
-        const orderPriceStr = marketPrice.priceStr;
-        const orderPrice = parseFloat(orderPriceStr);
+        const priceTick = this.getPriceTick('ETH');
+        const orderPrice = this.roundToTick(marketPrice.price, priceTick);
+        const orderPriceStr = this.formatDecimal(orderPrice, this.tickToDecimals(priceTick));
 
         if (!Number.isFinite(orderPrice) || orderPrice <= 0) {
             console.log('[Engine] ⚠️  Invalid order price, skipping');
@@ -463,5 +465,22 @@ export class TradingEngine {
         if (!Number.isFinite(value)) return '0';
         const fixed = value.toFixed(decimals);
         return fixed.replace(/\.?0+$/, '');
+    }
+
+    private getPriceTick(coin: string): number {
+        // Hyperliquid ETH tick is 0.5; fallback to 0.01 for others.
+        if (coin === 'ETH') return 0.5;
+        return 0.01;
+    }
+
+    private tickToDecimals(tick: number): number {
+        const tickStr = tick.toString();
+        const dot = tickStr.indexOf('.');
+        return dot === -1 ? 0 : tickStr.length - dot - 1;
+    }
+
+    private roundToTick(price: number, tick: number): number {
+        if (!tick || tick <= 0) return Math.floor(price);
+        return Math.floor(price / tick) * tick;
     }
 }
