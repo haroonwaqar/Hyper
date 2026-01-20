@@ -269,8 +269,21 @@ export class TradingEngine {
     ) {
         console.log(`[Engine] 📉 Executing CONSERVATIVE strategy (funding arbitrage)...`);
 
-        // Calculate position size (use 90% of balance for safety)
-        const positionSize = (balance * 0.9).toFixed(2);
+        const midPrice = await this.getMidPrice('ETH');
+        if (!midPrice || midPrice <= 0) {
+            console.log('[Engine] ⚠️  Unable to fetch ETH price, skipping');
+            return;
+        }
+
+        // Use 90% of balance as notional, convert to ETH size.
+        const notionalUsd = balance * 0.9 * leverage;
+        const sizeEth = notionalUsd / midPrice;
+        const positionSize = sizeEth.toFixed(6);
+
+        if (parseFloat(positionSize) <= 0) {
+            console.log('[Engine] ⚠️  Position size too small, skipping');
+            return;
+        }
 
         // Place market SHORT order (to receive funding)
         const order = await exchangeClient.order({
@@ -278,7 +291,7 @@ export class TradingEngine {
                 {
                     a: 0, // Asset index for ETH
                     b: false, // is_buy = false (SHORT)
-                    p: '0', // Price (0 for market)
+                    p: midPrice.toFixed(2), // Use current mid price for validation
                     s: positionSize, // Size
                     r: false, // reduce_only
                     t: { limit: { tif: 'Ioc' } }, // Immediate or Cancel
@@ -346,11 +359,23 @@ export class TradingEngine {
             return;
         }
 
-        // 4. Calculate position size with leverage
-        const baseSize = balance * 0.9;
-        const positionSize = (baseSize * leverage).toFixed(2);
+        const midPrice = await this.getMidPrice('ETH');
+        if (!midPrice || midPrice <= 0) {
+            console.log('[Engine] ⚠️  Unable to fetch ETH price, skipping');
+            return;
+        }
 
-        console.log(`[Engine] 💰 Position size: $${positionSize} (${leverage}x leverage)`);
+        // 4. Calculate position size with leverage (USD -> ETH)
+        const notionalUsd = balance * 0.9 * leverage;
+        const sizeEth = notionalUsd / midPrice;
+        const positionSize = sizeEth.toFixed(6);
+
+        if (parseFloat(positionSize) <= 0) {
+            console.log('[Engine] ⚠️  Position size too small, skipping');
+            return;
+        }
+
+        console.log(`[Engine] 💰 Position size: ${positionSize} ETH (~$${notionalUsd.toFixed(2)})`);
 
         // 5. Place market order
         const order = await exchangeClient.order({
@@ -358,7 +383,7 @@ export class TradingEngine {
                 {
                     a: 0, // ETH
                     b: direction === 'LONG', // is_buy
-                    p: '0', // Market order
+                    p: midPrice.toFixed(2), // Use current mid price for validation
                     s: positionSize,
                     r: false, // not reduce_only
                     t: { limit: { tif: 'Ioc' } },
@@ -381,5 +406,17 @@ export class TradingEngine {
             fundingThreshold: this.FUNDING_THRESHOLD,
             minBalance: this.MIN_BALANCE,
         };
+    }
+
+    private async getMidPrice(coin: string): Promise<number> {
+        try {
+            const mids = await this.infoClient.allMids();
+            const price = mids?.[coin];
+            if (!price) return 0;
+            return parseFloat(price);
+        } catch (error) {
+            console.warn('[Engine] ⚠️  Failed to fetch mid price:', error);
+            return 0;
+        }
     }
 }
