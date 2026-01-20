@@ -278,15 +278,16 @@ export class TradingEngine {
         // Use 90% of balance as notional, convert to ETH size.
         const notionalUsd = balance * 0.9 * leverage;
         const sizeEth = notionalUsd / midPrice;
-        const positionSize = sizeEth.toFixed(6);
+        const sizeDecimals = await this.getSizeDecimals('ETH');
+        const positionSize = this.formatDecimal(sizeEth, sizeDecimals);
 
         if (!Number.isFinite(sizeEth) || parseFloat(positionSize) <= 0) {
             console.log('[Engine] ⚠️  Position size too small, skipping');
             return;
         }
 
-        const priceTick = await this.getPriceTickSize('ETH');
-        const orderPrice = this.roundToTick(midPrice, priceTick);
+        const priceDecimals = this.getPriceDecimals('ETH');
+        const orderPrice = parseFloat(this.formatDecimal(midPrice, priceDecimals));
 
         if (!Number.isFinite(orderPrice) || orderPrice <= 0) {
             console.log('[Engine] ⚠️  Invalid order price, skipping');
@@ -300,10 +301,10 @@ export class TradingEngine {
                 {
                     a: 0, // Asset index for ETH
                     b: false, // is_buy = false (SHORT)
-                    p: orderPrice.toString(), // Must be on tick size
+                    p: orderPrice.toString(),
                     s: positionSize, // Size
                     r: false, // reduce_only
-                    t: { limit: { tif: 'Ioc' } }, // Immediate or Cancel
+                    t: { limit: { tif: 'FrontendMarket' } }, // Market-style
                 }
             ],
             grouping: 'na',
@@ -377,7 +378,8 @@ export class TradingEngine {
         // 4. Calculate position size with leverage (USD -> ETH)
         const notionalUsd = balance * 0.9 * leverage;
         const sizeEth = notionalUsd / midPrice;
-        const positionSize = sizeEth.toFixed(6);
+        const sizeDecimals = await this.getSizeDecimals('ETH');
+        const positionSize = this.formatDecimal(sizeEth, sizeDecimals);
 
         if (!Number.isFinite(sizeEth) || parseFloat(positionSize) <= 0) {
             console.log('[Engine] ⚠️  Position size too small, skipping');
@@ -386,8 +388,8 @@ export class TradingEngine {
 
         console.log(`[Engine] 💰 Position size: ${positionSize} ETH (~$${notionalUsd.toFixed(2)})`);
 
-        const priceTick = await this.getPriceTickSize('ETH');
-        const orderPrice = this.roundToTick(midPrice, priceTick);
+        const priceDecimals = this.getPriceDecimals('ETH');
+        const orderPrice = parseFloat(this.formatDecimal(midPrice, priceDecimals));
 
         if (!Number.isFinite(orderPrice) || orderPrice <= 0) {
             console.log('[Engine] ⚠️  Invalid order price, skipping');
@@ -401,10 +403,10 @@ export class TradingEngine {
                 {
                     a: 0, // ETH
                     b: direction === 'LONG', // is_buy
-                    p: orderPrice.toString(), // Must be on tick size
+                    p: orderPrice.toString(),
                     s: positionSize,
                     r: false, // not reduce_only
-                    t: { limit: { tif: 'Ioc' } },
+                    t: { limit: { tif: 'FrontendMarket' } },
                 }
             ],
             grouping: 'na',
@@ -439,21 +441,27 @@ export class TradingEngine {
         }
     }
 
-    private async getPriceTickSize(coin: string): Promise<number> {
+    private async getSizeDecimals(coin: string): Promise<number> {
         try {
-            const metaAndAssetCtxs = await this.infoClient.metaAndAssetCtxs();
-            const universe = metaAndAssetCtxs[0]?.universe || [];
+            const meta = await this.infoClient.meta();
+            const universe = meta?.universe || [];
             const asset = universe.find((u: any) => u.name === coin);
-            if (!asset || typeof asset?.szDecimals !== 'number') return 0.01;
-            return Math.pow(10, -asset.szDecimals);
+            if (!asset || typeof asset?.szDecimals !== 'number') return 6;
+            return asset.szDecimals;
         } catch (error) {
-            console.warn('[Engine] ⚠️  Failed to fetch tick size:', error);
-            return 0.01;
+            console.warn('[Engine] ⚠️  Failed to fetch size decimals:', error);
+            return 6;
         }
     }
 
-    private roundToTick(price: number, tick: number): number {
-        if (!tick || tick <= 0) return Math.floor(price);
-        return Math.floor(price / tick) * tick;
+    private getPriceDecimals(coin: string): number {
+        if (coin === 'ETH') return 2;
+        return 4;
+    }
+
+    private formatDecimal(value: number, decimals: number): string {
+        if (!Number.isFinite(value)) return '0';
+        const fixed = value.toFixed(decimals);
+        return fixed.replace(/\.?0+$/, '');
     }
 }
