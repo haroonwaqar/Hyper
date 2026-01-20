@@ -270,7 +270,7 @@ export class TradingEngine {
         console.log(`[Engine] 📉 Executing CONSERVATIVE strategy (funding arbitrage)...`);
 
         const midPrice = await this.getMidPrice('ETH');
-        if (!midPrice || midPrice <= 0) {
+        if (!Number.isFinite(midPrice) || midPrice <= 0) {
             console.log('[Engine] ⚠️  Unable to fetch ETH price, skipping');
             return;
         }
@@ -280,7 +280,7 @@ export class TradingEngine {
         const sizeEth = notionalUsd / midPrice;
         const positionSize = sizeEth.toFixed(6);
 
-        if (parseFloat(positionSize) <= 0) {
+        if (!Number.isFinite(sizeEth) || parseFloat(positionSize) <= 0) {
             console.log('[Engine] ⚠️  Position size too small, skipping');
             return;
         }
@@ -288,10 +288,11 @@ export class TradingEngine {
         const priceTick = await this.getPriceTickSize('ETH');
         const orderPrice = this.roundToTick(midPrice, priceTick);
 
-        if (orderPrice <= 0) {
+        if (!Number.isFinite(orderPrice) || orderPrice <= 0) {
             console.log('[Engine] ⚠️  Invalid order price, skipping');
             return;
         }
+        console.log(`[Engine] 🧮 midPx=${midPrice.toFixed(4)} price=${orderPrice} size=${positionSize}`);
 
         // Place market SHORT order (to receive funding)
         const order = await exchangeClient.order({
@@ -368,7 +369,7 @@ export class TradingEngine {
         }
 
         const midPrice = await this.getMidPrice('ETH');
-        if (!midPrice || midPrice <= 0) {
+        if (!Number.isFinite(midPrice) || midPrice <= 0) {
             console.log('[Engine] ⚠️  Unable to fetch ETH price, skipping');
             return;
         }
@@ -378,7 +379,7 @@ export class TradingEngine {
         const sizeEth = notionalUsd / midPrice;
         const positionSize = sizeEth.toFixed(6);
 
-        if (parseFloat(positionSize) <= 0) {
+        if (!Number.isFinite(sizeEth) || parseFloat(positionSize) <= 0) {
             console.log('[Engine] ⚠️  Position size too small, skipping');
             return;
         }
@@ -388,10 +389,11 @@ export class TradingEngine {
         const priceTick = await this.getPriceTickSize('ETH');
         const orderPrice = this.roundToTick(midPrice, priceTick);
 
-        if (orderPrice <= 0) {
+        if (!Number.isFinite(orderPrice) || orderPrice <= 0) {
             console.log('[Engine] ⚠️  Invalid order price, skipping');
             return;
         }
+        console.log(`[Engine] 🧮 midPx=${midPrice.toFixed(4)} price=${orderPrice} size=${positionSize}`);
 
         // 5. Place market order
         const order = await exchangeClient.order({
@@ -429,7 +431,8 @@ export class TradingEngine {
             const mids = await this.infoClient.allMids();
             const price = mids?.[coin];
             if (!price) return 0;
-            return parseFloat(price);
+            const parsed = parseFloat(price);
+            return Number.isFinite(parsed) ? parsed : 0;
         } catch (error) {
             console.warn('[Engine] ⚠️  Failed to fetch mid price:', error);
             return 0;
