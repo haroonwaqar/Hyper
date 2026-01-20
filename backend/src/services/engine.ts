@@ -11,7 +11,8 @@ export class TradingEngine {
     private isRunning: boolean = false;
     private infoClient: InfoClient;
     private readonly FUNDING_THRESHOLD = 0; // Always trade when balance is sufficient
-    private readonly MIN_BALANCE = 5; // 5 USDC minimum
+    private readonly MIN_BALANCE = 10; // 10 USDC minimum (Hyperliquid min order)
+    private readonly MIN_ORDER_USD = 10; // Hyperliquid min order notional
     private readonly LOOP_INTERVAL = 60000; // 60 seconds
 
     constructor() {
@@ -282,7 +283,11 @@ export class TradingEngine {
         }
 
         // Use 90% of balance as notional, convert to ETH size.
-        const notionalUsd = balance * 0.9 * leverage;
+        let notionalUsd = balance * 0.9 * leverage;
+        if (notionalUsd < this.MIN_ORDER_USD) {
+            console.log(`[Engine] ⏭️  Order notional too small ($${notionalUsd.toFixed(2)} < $${this.MIN_ORDER_USD})`);
+            return;
+        }
         const sizeEth = notionalUsd / marketPrice.price;
         const sizeDecimals = await this.getSizeDecimals('ETH');
         const positionSize = this.formatDecimal(sizeEth, sizeDecimals);
@@ -389,7 +394,11 @@ export class TradingEngine {
         }
 
         // 4. Calculate position size with leverage (USD -> ETH)
-        const notionalUsd = balance * 0.9 * leverage;
+        let notionalUsd = balance * 0.9 * leverage;
+        if (notionalUsd < this.MIN_ORDER_USD) {
+            console.log(`[Engine] ⏭️  Order notional too small ($${notionalUsd.toFixed(2)} < $${this.MIN_ORDER_USD})`);
+            return;
+        }
         const sizeEth = notionalUsd / marketPrice.price;
         const sizeDecimals = await this.getSizeDecimals('ETH');
         const positionSize = this.formatDecimal(sizeEth, sizeDecimals);
