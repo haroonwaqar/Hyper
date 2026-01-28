@@ -108,7 +108,11 @@ export class TradingEngine {
         const exchangeClient = new ExchangeClient({ transport, wallet });
 
         // SAFETY CLEANUP: if there are legacy PERP positions, close them immediately (no new perps allowed).
-        await this.closeAllPerpPositionsIfAny(agentAddress, exchangeClient);
+        const perpsCleared = await this.closeAllPerpPositionsIfAny(agentAddress, exchangeClient);
+        if (!perpsCleared) {
+            console.log('[Engine] ⏭️  Skipping spot strategy until legacy PERP positions are fully closed.');
+            return;
+        }
 
         const spot = await this.infoClient.spotClearinghouseState({ user: agentAddress });
         const usdc = spot.balances.find((b: any) => b.coin === this.QUOTE_COIN);
@@ -229,53 +233,78 @@ export class TradingEngine {
         }
     }
 
-    private async closeAllPerpPositionsIfAny(agentAddress: string, exchangeClient: ExchangeClient) {
+    private async closeAllPerpPositionsIfAny(agentAddress: string, exchangeClient: ExchangeClient): Promise<boolean> {
         const perp = await this.infoClient.clearinghouseState({ user: agentAddress });
         const openPositions = perp.assetPositions?.filter((p: any) => parseFloat(p.position.szi) !== 0) || [];
-        if (openPositions.length === 0) return;
+        if (openPositions.length === 0) return true;
 
         console.log(`[Engine] 🧹 Legacy PERP positions detected (${openPositions.length}). Closing to comply with Halal spot-only mandate.`);
 
         const [meta, assetCtxs] = await this.infoClient.metaAndAssetCtxs();
         const universe = meta?.universe || [];
 
+        let allClosed = true;
         for (const pos of openPositions) {
-            const coin = pos.position.coin as string;
-            const szi = parseFloat(pos.position.szi);
-            const size = Math.abs(szi);
-            if (!Number.isFinite(size) || size <= 0) continue;
+            try {
+                const coin = pos.position.coin as string;
+                const szi = parseFloat(pos.position.szi);
+                const size = Math.abs(szi);
+                if (!Number.isFinite(size) || size <= 0) continue;
 
-            const assetIndex = universe.findIndex((u: any) => u.name === coin);
-            if (assetIndex < 0) {
-                console.log(`[Engine] ⚠️  Unknown perp asset ${coin}, skipping close`);
-                continue;
+                const assetIndex = universe.findIndex((u: any) => u.name === coin);
+                if (assetIndex < 0) {
+                    console.log(`[Engine] ⚠️  Unknown perp asset ${coin}, skipping close`);
+                    allClosed = false;
+                    continue;
+                }
+
+                const szDecimals = Number(universe?.[assetIndex]?.szDecimals ?? 6);
+                const sizeStr = this.formatDecimal(size, Number.isFinite(szDecimals) ? szDecimals : 6);
+                if (!sizeStr || parseFloat(sizeStr) <= 0) {
+                    console.log(`[Engine] ⚠️  Invalid size for ${coin}, skipping close`);
+                    allClosed = false;
+                    continue;
+                }
+
+                const ctx = assetCtxs?.[assetIndex] as any;
+                const pxRaw = (ctx?.midPx ?? ctx?.markPx ?? ctx?.oraclePx ?? '').toString();
+                const px = parseFloat(pxRaw);
+                if (!Number.isFinite(px) || px <= 0) {
+                    console.log(`[Engine] ⚠️  Missing/invalid price for ${coin}, skipping close`);
+                    allClosed = false;
+                    continue;
+                }
+
+                // close short -> buy, close long -> sell
+                const isBuy = szi < 0;
+
+                // Use a slightly aggressive price bound + tick-aligned formatting so IOC-style closes don't get rejected.
+                const tick = this.getPerpPriceTick(coin);
+                const targetPx = isBuy ? px * 1.01 : px * 0.99;
+                const priceStr = this.formatPriceToTick(targetPx, tick, isBuy ? 'up' : 'down');
+
+                console.log(`[Engine] 🛑 Closing PERP ${coin}: ${sizeStr} (${isBuy ? 'BUY' : 'SELL'}) @ ${priceStr}`);
+
+                await exchangeClient.order({
+                    orders: [
+                        {
+                            a: assetIndex,
+                            b: isBuy,
+                            p: priceStr,
+                            s: sizeStr,
+                            r: true,
+                            t: { limit: { tif: 'Ioc' } },
+                        },
+                    ],
+                    grouping: 'na',
+                });
+            } catch (e) {
+                allClosed = false;
+                console.error('[Engine] ⚠️  Failed to close legacy PERP position (will retry next cycle):', e);
             }
-
-            const ctx = assetCtxs?.[assetIndex] as any;
-            const priceStr = (ctx?.midPx ?? ctx?.markPx ?? '').toString();
-            if (!priceStr) {
-                console.log(`[Engine] ⚠️  Missing price for ${coin}, skipping close`);
-                continue;
-            }
-
-            // close short -> buy, close long -> sell
-            const isBuy = szi < 0;
-            console.log(`[Engine] 🛑 Closing PERP ${coin}: ${size} (${isBuy ? 'BUY' : 'SELL'}) @ ${priceStr}`);
-
-            await exchangeClient.order({
-                orders: [
-                    {
-                        a: assetIndex,
-                        b: isBuy,
-                        p: priceStr,
-                        s: size.toString(),
-                        r: true,
-                        t: { limit: { tif: 'FrontendMarket' } },
-                    },
-                ],
-                grouping: 'na',
-            });
         }
+
+        return allClosed;
     }
 
     private async getSpotMarketInfo(): Promise<SpotMarketInfo> {
@@ -339,6 +368,39 @@ export class TradingEngine {
         if (!Number.isFinite(value)) return '0';
         const fixed = value.toFixed(decimals);
         return fixed.replace(/\.?0+$/, '');
+    }
+
+    /**
+     * Hyperliquid PERP tick sizes aren't exposed in metaAndAssetCtxs.
+     * We keep a small mapping for major assets to avoid tick rejections during legacy cleanup.
+     * Defaults to 1 which is valid for most major perps.
+     */
+    private getPerpPriceTick(coin: string): number {
+        const c = coin.toUpperCase();
+        // Use coarse ticks for majors to stay valid across likely tick sizes.
+        if (c === 'BTC') return 10;
+        if (c === 'ETH') return 10;
+        if (c === 'SOL') return 0.01;
+        if (c === 'HYPE') return 0.0001;
+        return 1;
+    }
+
+    private formatPriceToTick(price: number, tick: number, mode: 'down' | 'up'): string {
+        const px = Number.isFinite(price) ? price : 0;
+        const tk = Number.isFinite(tick) && tick > 0 ? tick : 1;
+        const decimals = this.tickDecimals(tk);
+
+        // Avoid floating drift by rounding after tick step selection.
+        const steps = mode === 'up' ? Math.ceil(px / tk) : Math.floor(px / tk);
+        const snapped = steps * tk;
+        const snappedFixed = Number(snapped.toFixed(decimals));
+        return snappedFixed.toFixed(decimals).replace(/\.?0+$/, '');
+    }
+
+    private tickDecimals(tick: number): number {
+        const s = tick.toString();
+        if (!s.includes('.')) return 0;
+        return s.split('.')[1]?.length ?? 0;
     }
 }
 

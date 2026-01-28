@@ -22,6 +22,32 @@ export class AgentService {
         return { assetIndex, priceStr };
     }
 
+    private static getPerpPriceTick(coin: string): number {
+        const c = coin.toUpperCase();
+        // Use coarse ticks for majors to stay valid across likely tick sizes.
+        if (c === 'BTC') return 10;
+        if (c === 'ETH') return 10;
+        if (c === 'SOL') return 0.01;
+        if (c === 'HYPE') return 0.0001;
+        return 1;
+    }
+
+    private static tickDecimals(tick: number): number {
+        const s = tick.toString();
+        if (!s.includes('.')) return 0;
+        return s.split('.')[1]?.length ?? 0;
+    }
+
+    private static formatPriceToTick(price: number, tick: number, mode: 'down' | 'up'): string {
+        const px = Number.isFinite(price) ? price : 0;
+        const tk = Number.isFinite(tick) && tick > 0 ? tick : 1;
+        const decimals = this.tickDecimals(tk);
+        const steps = mode === 'up' ? Math.ceil(px / tk) : Math.floor(px / tk);
+        const snapped = steps * tk;
+        const snappedFixed = Number(snapped.toFixed(decimals));
+        return snappedFixed.toFixed(decimals).replace(/\.?0+$/, '');
+    }
+
     /**
      * Creates a new agent for a user if one doesn't exist.
      * Generates a new random wallet, encrypts the private key, and stores it.
@@ -170,14 +196,18 @@ export class AgentService {
                     console.log(`[AgentService] ⚡ Closing ${pos.position.coin}: ${size} (${isBuy ? 'BUY' : 'SELL'})`);
 
                     const { assetIndex, priceStr } = await this.getAssetIndexAndPrice(infoClient, pos.position.coin);
+                    const px = parseFloat(priceStr);
+                    const tick = this.getPerpPriceTick(pos.position.coin);
+                    const targetPx = isBuy ? px * 1.01 : px * 0.99;
+                    const closePxStr = this.formatPriceToTick(targetPx, tick, isBuy ? 'up' : 'down');
                     await exchangeClient.order({
                         orders: [{
                             a: assetIndex,
                             b: isBuy,
-                            p: priceStr,
+                            p: closePxStr,
                             s: size.toString(),
                             r: true, // reduce_only = true (closing position)
-                            t: { limit: { tif: 'FrontendMarket' } },
+                            t: { limit: { tif: 'Ioc' } },
                         }],
                         grouping: 'na',
                     });
@@ -339,28 +369,31 @@ export class AgentService {
         const transport = new HttpTransport(); // Defaults to Mainnet
         const infoClient = new InfoClient({ transport });
 
-        // Fetch account value from perp clearinghouse (deposits land here).
-        let usdcBalance = '0';
+        // Fetch balances from BOTH perp and spot pockets.
+        let perpUsdcBalance = '0';
         try {
             const clearinghouse = await infoClient.clearinghouseState({ user: agent.walletAddress });
             const accountValue = clearinghouse?.marginSummary?.accountValue;
             if (accountValue != null) {
-                usdcBalance = String(accountValue);
+                perpUsdcBalance = String(accountValue);
             }
         } catch (error) {
             console.error('Error fetching HL clearinghouse state:', error);
         }
 
-        // Fallback: spot USDC balance (may be zero even after deposit).
-        if (!usdcBalance || usdcBalance === '0') {
-            try {
-                const spot = await infoClient.spotClearinghouseState({ user: agent.walletAddress });
-                const usdc = spot.balances.find((b: any) => b.coin === 'USDC');
-                usdcBalance = usdc ? usdc.total : '0';
-            } catch (error) {
-                console.error('Error fetching HL spot state:', error);
-            }
+        let spotUsdcBalance = '0';
+        let spotHypeBalance = '0';
+        try {
+            const spot = await infoClient.spotClearinghouseState({ user: agent.walletAddress });
+            const usdc = spot.balances.find((b: any) => b.coin === 'USDC');
+            const hype = spot.balances.find((b: any) => b.coin === 'HYPE');
+            spotUsdcBalance = usdc ? String(usdc.total) : '0';
+            spotHypeBalance = hype ? String(hype.total) : '0';
+        } catch (error) {
+            console.error('Error fetching HL spot state:', error);
         }
+
+        const usdcBalance = (parseFloat(perpUsdcBalance || '0') + parseFloat(spotUsdcBalance || '0')).toFixed(2);
 
         // Also check Arbitrum USDC balance to detect funds that haven't been credited to Hyperliquid yet.
         let arbUsdcBalance = '0';
@@ -383,6 +416,9 @@ export class AgentService {
             isActive: agent.isActive,
             config: JSON.parse(agent.strategyConfig),
             usdcBalance,
+            perpUsdcBalance,
+            spotUsdcBalance,
+            spotHypeBalance,
             arbUsdcBalance,
         };
     }

@@ -1,6 +1,10 @@
 import { ethers } from 'ethers';
 import { ExchangeClient, HttpTransport } from '@nktkas/hyperliquid';
 export declare class AgentService {
+    private static getAssetIndexAndPrice;
+    private static getPerpPriceTick;
+    private static tickDecimals;
+    private static formatPriceToTick;
     /**
      * Creates a new agent for a user if one doesn't exist.
      * Generates a new random wallet, encrypts the private key, and stores it.
@@ -19,6 +23,27 @@ export declare class AgentService {
         totalPositions: number;
     }>;
     /**
+     * Starts (reactivates) an agent.
+     */
+    static startAgent(worldWalletAddress: string): Promise<{
+        status: string;
+    }>;
+    /**
+     * Withdraw funds from Hyperliquid to the user's wallet.
+     */
+    static withdrawAgent(worldWalletAddress: string, amount?: string): Promise<{
+        success: boolean;
+        amount: string;
+        destination: string;
+        response: {
+            status: "ok";
+            response: {
+                type: "default";
+            };
+        };
+        note: string;
+    }>;
+    /**
      * Retrieves agent status and checks on-chain balance via Hyperliquid SDK.
      */
     static getAgentStatus(worldWalletAddress: string): Promise<{
@@ -27,6 +52,9 @@ export declare class AgentService {
         isActive: boolean;
         config: any;
         usdcBalance: string;
+        perpUsdcBalance: string;
+        spotUsdcBalance: string;
+        spotHypeBalance: string;
         arbUsdcBalance: string;
     } | null>;
     /**

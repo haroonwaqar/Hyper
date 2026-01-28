@@ -80,6 +80,30 @@ router.post('/stop', async (req, res) => {
         });
     }
 });
+// POST /agent/start - Reactivate agent
+router.post('/start', async (req, res) => {
+    try {
+        console.log('[Route] ▶️ Start agent request:', req.body);
+        const { worldWalletAddress } = req.body;
+        if (!worldWalletAddress) {
+            res.status(400).json({ error: 'worldWalletAddress is required' });
+            return;
+        }
+        const result = await AgentService.startAgent(worldWalletAddress);
+        console.log('[Route] ✅ Agent started:', result);
+        res.json({
+            success: true,
+            ...result,
+        });
+    }
+    catch (error) {
+        console.error('[Route] ❌ Error starting agent:', error);
+        res.status(500).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Failed to start agent'
+        });
+    }
+});
 // POST /agent/strategy - Update agent strategy
 router.post('/strategy', async (req, res) => {
     try {
@@ -97,6 +121,25 @@ router.post('/strategy', async (req, res) => {
     catch (error) {
         console.error('Error updating strategy:', error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// POST /agent/withdraw - Withdraw funds from Hyperliquid to user's wallet
+router.post('/withdraw', async (req, res) => {
+    try {
+        const { worldWalletAddress, amount } = req.body;
+        if (!worldWalletAddress) {
+            res.status(400).json({ error: 'worldWalletAddress is required' });
+            return;
+        }
+        const result = await AgentService.withdrawAgent(worldWalletAddress, amount);
+        res.json(result);
+    }
+    catch (error) {
+        console.error('[Route] ❌ Error withdrawing funds:', error);
+        res.status(500).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Failed to withdraw'
+        });
     }
 });
 // POST /agent/authorize

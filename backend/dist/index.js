@@ -2,9 +2,7 @@ import './config.js';
 import { prisma } from './db.js';
 // Verify database connection on startup
 const dbUrl = process.env.TURSO_DATABASE_URL || process.env.DATABASE_URL || 'not configured';
-const maskedUrl = dbUrl.replace(/:[^:]*@/, ':****@'); // Mask credentials
 console.log('🗄️  Database configuration:');
-console.log('   URL:', maskedUrl);
 console.log('   Has auth token:', !!process.env.TURSO_AUTH_TOKEN);
 // Test database connection
 async function testDatabaseConnection() {

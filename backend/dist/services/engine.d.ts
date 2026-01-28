@@ -2,52 +2,40 @@ export declare class TradingEngine {
     private intervalId;
     private isRunning;
     private infoClient;
-    private readonly FUNDING_THRESHOLD;
-    private readonly MIN_BALANCE;
-    private readonly LOOP_INTERVAL;
+    private readonly LOOP_INTERVAL_MS;
+    private readonly BASE_COIN;
+    private readonly QUOTE_COIN;
+    private readonly MIN_USDC_TO_BUY;
+    private readonly TAKE_PROFIT_PCT;
+    private readonly BUY_COOLDOWN_MS;
+    private readonly SELL_COOLDOWN_MS;
+    private lastBuyAtByAgent;
+    private lastSellAtByAgent;
+    private spotMarketCache;
+    private readonly SPOT_CACHE_TTL_MS;
     constructor();
-    /**
-     * Start the trading engine
-     */
     start(): void;
-    /**
-     * Stop the trading engine
-     */
     stop(): void;
-    /**
-     * Main execution loop
-     */
-    private executeLoop;
-    /**
-     * Get the current funding rate for a given coin
-     * Uses multiple methods with fallbacks for resilience
-     * Returns 0 (neutral) if all methods fail to prevent engine crashes
-     */
-    private getFundingRate;
-    /**
-     * Get all active agents with "Safe" strategy
-     */
-    private getActiveAgents;
-    /**
-     * Execute strategy for a single agent
-     */
-    private executeAgentStrategy;
-    /**
-     * Execute conservative strategy (funding rate arbitrage)
-     */
-    private executeConservativeStrategy;
-    /**
-     * Execute aggressive strategy (momentum-based trading)
-     */
-    private executeAggressiveStrategy;
-    /**
-     * Get engine status
-     */
     getStatus(): {
         isRunning: boolean;
-        interval: number;
-        fundingThreshold: number;
-        minBalance: number;
+        intervalMs: number;
+        mode: string;
+        pair: string;
+        minBuyUsdc: number;
+        takeProfitPct: number;
     };
+    private executeLoop;
+    private executeAgentSpotStrategy;
+    private closeAllPerpPositionsIfAny;
+    private getSpotMarketInfo;
+    private formatDecimal;
+    /**
+     * Hyperliquid PERP tick sizes aren't exposed in metaAndAssetCtxs.
+     * We keep a small mapping for major assets to avoid tick rejections during legacy cleanup.
+     * Defaults to 1 which is valid for most major perps.
+     */
+    private getPerpPriceTick;
+    private formatPriceToTick;
+    private tickDecimals;
 }
 //# sourceMappingURL=engine.d.ts.map

@@ -13,12 +13,19 @@ router.get('/portfolio', async (req, res) => {
             return;
         }
         console.log('[Portfolio] Fetching data for:', walletAddress);
-        // Find user's agent
+        // walletAddress can be either:
+        // - the user's World App wallet (worldWalletAddress), OR
+        // - the agent's wallet (agent.walletAddress)
         const agent = await prisma.agent.findFirst({
             where: {
-                user: {
-                    worldWalletAddress: walletAddress,
-                },
+                OR: [
+                    { walletAddress },
+                    {
+                        user: {
+                            worldWalletAddress: walletAddress,
+                        },
+                    },
+                ],
             },
         });
         if (!agent) {
@@ -29,24 +36,33 @@ router.get('/portfolio', async (req, res) => {
             });
             return;
         }
-        // Fetch clearinghouse state from Hyperliquid
-        const clearinghouse = await infoClient.clearinghouseState({
-            user: agent.walletAddress,
-        });
-        // Fetch open orders
-        const openOrders = await infoClient.openOrders({
-            user: agent.walletAddress,
-        });
-        // Calculate total portfolio value
+        // Fetch BOTH perp + spot states (Hyperliquid splits these pockets).
+        const [clearinghouse, spot, openOrders, spotMetaCtx] = await Promise.all([
+            infoClient.clearinghouseState({ user: agent.walletAddress }),
+            infoClient.spotClearinghouseState({ user: agent.walletAddress }),
+            infoClient.openOrders({ user: agent.walletAddress }),
+            infoClient.spotMetaAndAssetCtxs(),
+        ]);
+        // Build spot price map (by coin)
+        const [, spotAssetCtxs] = spotMetaCtx;
+        const spotPxByCoin = new Map();
+        for (const ctx of spotAssetCtxs) {
+            const coin = String(ctx?.coin ?? '').toUpperCase();
+            const px = parseFloat(String(ctx?.midPx ?? ctx?.markPx ?? '0'));
+            if (coin && Number.isFinite(px) && px > 0)
+                spotPxByCoin.set(coin, px);
+        }
+        // PERP positions (legacy / should be 0 under halal mode)
         const assetPositions = clearinghouse.assetPositions || [];
-        let totalPositionValue = 0;
-        let totalUnrealizedPnl = 0;
-        const positions = assetPositions.map((pos) => {
+        let perpPositionValue = 0;
+        let perpUnrealizedPnl = 0;
+        const perpPositions = assetPositions.map((pos) => {
             const pnl = parseFloat(pos.position.unrealizedPnl || '0');
             const value = parseFloat(pos.position.positionValue || '0');
-            totalPositionValue += value;
-            totalUnrealizedPnl += pnl;
+            perpPositionValue += value;
+            perpUnrealizedPnl += pnl;
             return {
+                type: 'PERP',
                 coin: pos.position.coin,
                 side: parseFloat(pos.position.szi) > 0 ? 'LONG' : 'SHORT',
                 size: Math.abs(parseFloat(pos.position.szi)),
@@ -56,17 +72,59 @@ router.get('/portfolio', async (req, res) => {
                 marginUsed: parseFloat(pos.position.marginUsed || '0'),
             };
         });
-        // Get account value
+        // SPOT balances (what the halal bot trades)
+        const balances = spot?.balances || [];
+        const spotUsdc = balances.find((b) => String(b.coin).toUpperCase() === 'USDC');
+        const spotUsdcTotal = spotUsdc ? parseFloat(spotUsdc.total || '0') : 0;
+        const spotUsdcHold = spotUsdc ? parseFloat(spotUsdc.hold || '0') : 0;
+        const spotUsdcAvailable = Math.max(0, spotUsdcTotal - spotUsdcHold);
+        let spotNonUsdcValue = 0;
+        let spotUnrealizedPnl = 0;
+        const spotPositions = balances
+            .filter((b) => String(b.coin).toUpperCase() !== 'USDC')
+            .map((b) => {
+            const coin = String(b.coin).toUpperCase();
+            const total = parseFloat(b.total || '0');
+            const hold = parseFloat(b.hold || '0');
+            const available = Math.max(0, total - hold);
+            const entryNtl = parseFloat(b.entryNtl || '0'); // USDC cost basis
+            const px = spotPxByCoin.get(coin) ?? 0;
+            const value = total * px;
+            const pnl = value - entryNtl;
+            if (Number.isFinite(value))
+                spotNonUsdcValue += value;
+            if (Number.isFinite(pnl))
+                spotUnrealizedPnl += pnl;
+            return {
+                type: 'SPOT',
+                coin,
+                side: 'HOLD',
+                size: total,
+                available,
+                entryNotional: entryNtl,
+                markPrice: px,
+                unrealizedPnl: pnl,
+                positionValue: value,
+            };
+        })
+            .filter((p) => Number.isFinite(p.size) && p.size > 0);
+        // PERP account value
         const marginSummary = clearinghouse.marginSummary;
-        const accountValue = parseFloat(marginSummary.accountValue || '0');
-        const totalMarginUsed = parseFloat(marginSummary.totalMarginUsed || '0');
+        const perpAccountValue = parseFloat(marginSummary.accountValue || '0');
+        const perpMarginUsed = parseFloat(marginSummary.totalMarginUsed || '0');
+        // Total portfolio value (perp pocket + spot pocket)
+        const accountValue = perpAccountValue + spotUsdcTotal + spotNonUsdcValue;
+        const totalMarginUsed = perpMarginUsed; // spot has no margin
+        const totalUnrealizedPnl = perpUnrealizedPnl + spotUnrealizedPnl;
+        const totalPositionValue = perpPositionValue + spotNonUsdcValue;
+        const positions = [...perpPositions, ...spotPositions];
         res.json({
             success: true,
             hasAgent: true,
             portfolio: {
                 accountValue,
                 totalMarginUsed,
-                availableBalance: accountValue - totalMarginUsed,
+                availableBalance: Math.max(0, (perpAccountValue - perpMarginUsed)) + spotUsdcAvailable,
                 totalUnrealizedPnl,
                 totalPositionValue,
                 positions,

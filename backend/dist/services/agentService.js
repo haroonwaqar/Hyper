@@ -5,6 +5,48 @@ import { InfoClient, ExchangeClient, HttpTransport } from '@nktkas/hyperliquid';
 const ARBITRUM_RPC = 'https://arb1.arbitrum.io/rpc';
 const ARBITRUM_USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 export class AgentService {
+    static async getAssetIndexAndPrice(infoClient, coin) {
+        const [meta, assetCtxs] = await infoClient.metaAndAssetCtxs();
+        const universe = meta?.universe || [];
+        const assetIndex = universe.findIndex((u) => u.name === coin);
+        if (assetIndex < 0) {
+            throw new Error(`Unknown asset ${coin}`);
+        }
+        const ctx = assetCtxs?.[assetIndex];
+        const priceStr = (ctx?.midPx ?? ctx?.markPx ?? '').toString();
+        if (!priceStr) {
+            throw new Error(`Missing price for ${coin}`);
+        }
+        return { assetIndex, priceStr };
+    }
+    static getPerpPriceTick(coin) {
+        const c = coin.toUpperCase();
+        // Use coarse ticks for majors to stay valid across likely tick sizes.
+        if (c === 'BTC')
+            return 10;
+        if (c === 'ETH')
+            return 10;
+        if (c === 'SOL')
+            return 0.01;
+        if (c === 'HYPE')
+            return 0.0001;
+        return 1;
+    }
+    static tickDecimals(tick) {
+        const s = tick.toString();
+        if (!s.includes('.'))
+            return 0;
+        return s.split('.')[1]?.length ?? 0;
+    }
+    static formatPriceToTick(price, tick, mode) {
+        const px = Number.isFinite(price) ? price : 0;
+        const tk = Number.isFinite(tick) && tick > 0 ? tick : 1;
+        const decimals = this.tickDecimals(tk);
+        const steps = mode === 'up' ? Math.ceil(px / tk) : Math.floor(px / tk);
+        const snapped = steps * tk;
+        const snappedFixed = Number(snapped.toFixed(decimals));
+        return snappedFixed.toFixed(decimals).replace(/\.?0+$/, '');
+    }
     /**
      * Creates a new agent for a user if one doesn't exist.
      * Generates a new random wallet, encrypts the private key, and stores it.
@@ -133,13 +175,18 @@ export class AgentService {
             for (const pos of openPositions) {
                 try {
                     const size = Math.abs(parseFloat(pos.position.szi));
-                    const isBuy = parseFloat(pos.position.szi) < 0; // Close long = sell, close short = buy
+                    const isBuy = parseFloat(pos.position.szi) < 0; // close short -> buy, close long -> sell
                     console.log(`[AgentService] ⚡ Closing ${pos.position.coin}: ${size} (${isBuy ? 'BUY' : 'SELL'})`);
+                    const { assetIndex, priceStr } = await this.getAssetIndexAndPrice(infoClient, pos.position.coin);
+                    const px = parseFloat(priceStr);
+                    const tick = this.getPerpPriceTick(pos.position.coin);
+                    const targetPx = isBuy ? px * 1.01 : px * 0.99;
+                    const closePxStr = this.formatPriceToTick(targetPx, tick, isBuy ? 'up' : 'down');
                     await exchangeClient.order({
                         orders: [{
-                                a: pos.position.coin === 'ETH' ? 0 : 1, // Simplified: 0=ETH
+                                a: assetIndex,
                                 b: isBuy,
-                                p: '0', // Market order
+                                p: closePxStr,
                                 s: size.toString(),
                                 r: true, // reduce_only = true (closing position)
                                 t: { limit: { tif: 'Ioc' } },
@@ -172,6 +219,90 @@ export class AgentService {
         }
     }
     /**
+     * Starts (reactivates) an agent.
+     */
+    static async startAgent(worldWalletAddress) {
+        console.log('[AgentService] ▶️ startAgent called for:', worldWalletAddress);
+        const user = await prisma.user.findUnique({
+            where: { worldWalletAddress },
+        });
+        if (!user) {
+            throw new Error('User not found');
+        }
+        const agent = await prisma.agent.findUnique({
+            where: { userId: user.id },
+        });
+        if (!agent) {
+            throw new Error('Agent not found');
+        }
+        await prisma.agent.update({
+            where: { id: agent.id },
+            data: { isActive: true },
+        });
+        console.log('[AgentService] ✅ Agent started');
+        return { status: 'started' };
+    }
+    /**
+     * Withdraw funds from Hyperliquid to the user's wallet.
+     */
+    static async withdrawAgent(worldWalletAddress, amount) {
+        console.log('[AgentService] 💸 withdrawAgent called for:', worldWalletAddress);
+        const user = await prisma.user.findUnique({
+            where: { worldWalletAddress },
+        });
+        if (!user) {
+            throw new Error('User not found');
+        }
+        const agent = await prisma.agent.findUnique({
+            where: { userId: user.id },
+        });
+        if (!agent) {
+            throw new Error('Agent not found');
+        }
+        const privateKey = decrypt(agent.encryptedPrivateKey);
+        const wallet = new ethers.Wallet(privateKey);
+        const transport = new HttpTransport();
+        const exchangeClient = new ExchangeClient({ transport, wallet });
+        const infoClient = new InfoClient({ transport });
+        // Refuse to withdraw if there are open positions (must stop first).
+        const positions = await infoClient.clearinghouseState({ user: agent.walletAddress });
+        const openPositions = positions.assetPositions?.filter((p) => parseFloat(p.position.szi) !== 0) || [];
+        if (openPositions.length > 0) {
+            throw new Error('Agent has open positions. Stop the agent first to close positions before withdrawing.');
+        }
+        const state = await infoClient.clearinghouseState({ user: agent.walletAddress });
+        const accountValue = parseFloat(state?.marginSummary?.accountValue || '0');
+        if (!accountValue || accountValue <= 0) {
+            throw new Error('No available balance to withdraw');
+        }
+        let withdrawAmount = accountValue;
+        if (amount) {
+            const parsed = parseFloat(amount);
+            if (!Number.isFinite(parsed) || parsed <= 0) {
+                throw new Error('Invalid withdrawal amount');
+            }
+            withdrawAmount = Math.min(parsed, accountValue);
+        }
+        // Keep a tiny buffer to avoid full-balance edge cases.
+        withdrawAmount = Math.max(0, withdrawAmount - 0.01);
+        if (withdrawAmount <= 0) {
+            throw new Error('Withdrawal amount too small');
+        }
+        // Note: Hyperliquid withdrawals pay out USDC on Arbitrum to the destination address.
+        const res = await exchangeClient.withdraw3({
+            destination: worldWalletAddress,
+            amount: withdrawAmount.toFixed(2),
+        });
+        console.log('[AgentService] ✅ Withdrawal initiated');
+        return {
+            success: true,
+            amount: withdrawAmount.toFixed(2),
+            destination: worldWalletAddress,
+            response: res,
+            note: 'Withdrawal will arrive as USDC on Arbitrum to your World App wallet address.',
+        };
+    }
+    /**
      * Retrieves agent status and checks on-chain balance via Hyperliquid SDK.
      */
     static async getAgentStatus(worldWalletAddress) {
@@ -191,29 +322,31 @@ export class AgentService {
         // Initialize InfoClient for reading state
         const transport = new HttpTransport(); // Defaults to Mainnet
         const infoClient = new InfoClient({ transport });
-        // Fetch account value from perp clearinghouse (deposits land here).
-        let usdcBalance = '0';
+        // Fetch balances from BOTH perp and spot pockets.
+        let perpUsdcBalance = '0';
         try {
             const clearinghouse = await infoClient.clearinghouseState({ user: agent.walletAddress });
             const accountValue = clearinghouse?.marginSummary?.accountValue;
             if (accountValue != null) {
-                usdcBalance = String(accountValue);
+                perpUsdcBalance = String(accountValue);
             }
         }
         catch (error) {
             console.error('Error fetching HL clearinghouse state:', error);
         }
-        // Fallback: spot USDC balance (may be zero even after deposit).
-        if (!usdcBalance || usdcBalance === '0') {
-            try {
-                const spot = await infoClient.spotClearinghouseState({ user: agent.walletAddress });
-                const usdc = spot.balances.find((b) => b.coin === 'USDC');
-                usdcBalance = usdc ? usdc.total : '0';
-            }
-            catch (error) {
-                console.error('Error fetching HL spot state:', error);
-            }
+        let spotUsdcBalance = '0';
+        let spotHypeBalance = '0';
+        try {
+            const spot = await infoClient.spotClearinghouseState({ user: agent.walletAddress });
+            const usdc = spot.balances.find((b) => b.coin === 'USDC');
+            const hype = spot.balances.find((b) => b.coin === 'HYPE');
+            spotUsdcBalance = usdc ? String(usdc.total) : '0';
+            spotHypeBalance = hype ? String(hype.total) : '0';
         }
+        catch (error) {
+            console.error('Error fetching HL spot state:', error);
+        }
+        const usdcBalance = (parseFloat(perpUsdcBalance || '0') + parseFloat(spotUsdcBalance || '0')).toFixed(2);
         // Also check Arbitrum USDC balance to detect funds that haven't been credited to Hyperliquid yet.
         let arbUsdcBalance = '0';
         try {
@@ -231,6 +364,9 @@ export class AgentService {
             isActive: agent.isActive,
             config: JSON.parse(agent.strategyConfig),
             usdcBalance,
+            perpUsdcBalance,
+            spotUsdcBalance,
+            spotHypeBalance,
             arbUsdcBalance,
         };
     }
