@@ -278,10 +278,17 @@ export class TradingEngine {
                 // close short -> buy, close long -> sell
                 const isBuy = szi < 0;
 
-                // Use a slightly aggressive price bound + tick-aligned formatting so IOC-style closes don't get rejected.
-                const tick = this.getPerpPriceTick(coin);
-                const targetPx = isBuy ? px * 1.01 : px * 0.99;
-                const priceStr = this.formatPriceToTick(targetPx, tick, isBuy ? 'up' : 'down');
+                /**
+                 * Legacy PERP cleanup must reliably CROSS the book.
+                 * If we submit an IOC that doesn't cross, HL returns:
+                 * "Order could not immediately match against any resting orders".
+                 *
+                 * So we use an aggressive-but-still-valid bound:
+                 * - Buy-close: ~1.9x mark (90% away, within the 95% rule)
+                 * - Sell-close: ~0.1x mark (90% away)
+                 * and snap to a coarse step to avoid tick rejections.
+                 */
+                const priceStr = this.getAggressivePerpClosePriceStr(px, isBuy);
 
                 console.log(`[Engine] 🛑 Closing PERP ${coin}: ${sizeStr} (${isBuy ? 'BUY' : 'SELL'}) @ ${priceStr}`);
 
@@ -370,37 +377,20 @@ export class TradingEngine {
         return fixed.replace(/\.?0+$/, '');
     }
 
-    /**
-     * Hyperliquid PERP tick sizes aren't exposed in metaAndAssetCtxs.
-     * We keep a small mapping for major assets to avoid tick rejections during legacy cleanup.
-     * Defaults to 1 which is valid for most major perps.
-     */
-    private getPerpPriceTick(coin: string): number {
-        const c = coin.toUpperCase();
-        // Use coarse ticks for majors to stay valid across likely tick sizes.
-        if (c === 'BTC') return 10;
-        if (c === 'ETH') return 10;
-        if (c === 'SOL') return 0.01;
-        if (c === 'HYPE') return 0.0001;
-        return 1;
-    }
+    private getAggressivePerpClosePriceStr(markPx: number, isBuy: boolean): string {
+        const px = Number.isFinite(markPx) && markPx > 0 ? markPx : 0;
+        if (px <= 0) return '1';
 
-    private formatPriceToTick(price: number, tick: number, mode: 'down' | 'up'): string {
-        const px = Number.isFinite(price) ? price : 0;
-        const tk = Number.isFinite(tick) && tick > 0 ? tick : 1;
-        const decimals = this.tickDecimals(tk);
+        // Keep within the "95% away" constraint, but far enough to cross.
+        const raw = isBuy ? px * 1.9 : px * 0.1;
 
-        // Avoid floating drift by rounding after tick step selection.
-        const steps = mode === 'up' ? Math.ceil(px / tk) : Math.floor(px / tk);
-        const snapped = steps * tk;
-        const snappedFixed = Number(snapped.toFixed(decimals));
-        return snappedFixed.toFixed(decimals).replace(/\.?0+$/, '');
-    }
+        // Snap to a coarse step (multiple of 10) that is divisible by common tick sizes (0.5, 1, 2.5, 5, 10, ...).
+        const step = 10;
+        const snapped = isBuy ? Math.ceil(raw / step) * step : Math.floor(raw / step) * step;
 
-    private tickDecimals(tick: number): number {
-        const s = tick.toString();
-        if (!s.includes('.')) return 0;
-        return s.split('.')[1]?.length ?? 0;
+        // Safety clamp: never let it go to 0.
+        const finalPx = Math.max(step, snapped);
+        return finalPx.toFixed(0);
     }
 }
 

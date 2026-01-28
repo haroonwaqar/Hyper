@@ -29,13 +29,6 @@ export declare class TradingEngine {
     private closeAllPerpPositionsIfAny;
     private getSpotMarketInfo;
     private formatDecimal;
-    /**
-     * Hyperliquid PERP tick sizes aren't exposed in metaAndAssetCtxs.
-     * We keep a small mapping for major assets to avoid tick rejections during legacy cleanup.
-     * Defaults to 1 which is valid for most major perps.
-     */
-    private getPerpPriceTick;
-    private formatPriceToTick;
-    private tickDecimals;
+    private getAggressivePerpClosePriceStr;
 }
 //# sourceMappingURL=engine.d.ts.map
