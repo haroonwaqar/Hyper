@@ -103,6 +103,13 @@ export class TradingEngine {
     private async executeAgentSpotStrategy(agentAddress: string, encryptedPrivateKey: string, market: SpotMarketInfo) {
         console.log(`[Engine] 🤖 Processing agent (${agentAddress})`);
 
+        const wallet = new ethers.Wallet(decrypt(encryptedPrivateKey));
+        const transport = new HttpTransport();
+        const exchangeClient = new ExchangeClient({ transport, wallet });
+
+        // SAFETY CLEANUP: if there are legacy PERP positions, close them immediately (no new perps allowed).
+        await this.closeAllPerpPositionsIfAny(agentAddress, exchangeClient);
+
         const spot = await this.infoClient.spotClearinghouseState({ user: agentAddress });
         const usdc = spot.balances.find((b: any) => b.coin === this.QUOTE_COIN);
         const hype = spot.balances.find((b: any) => b.coin === this.BASE_COIN);
@@ -123,44 +130,50 @@ export class TradingEngine {
             console.log(`[Engine] 📌 Avg entry: ${avgEntry.toFixed(4)} ${this.QUOTE_COIN}`);
         }
 
-        const wallet = new ethers.Wallet(decrypt(encryptedPrivateKey));
-        const transport = new HttpTransport();
-        const exchangeClient = new ExchangeClient({ transport, wallet });
-
         // Wallet split fix: if Spot USDC is low but Perp account has USDC, transfer Perp -> Spot.
         if (usdcAvailable < this.MIN_USDC_TO_BUY) {
             const perp = await this.infoClient.clearinghouseState({ user: agentAddress });
             const perpValue = parseFloat(perp?.marginSummary?.accountValue || '0');
-            if (perpValue >= this.MIN_USDC_TO_BUY) {
-                // Transfer up to MIN_USDC_TO_BUY (or all perp value if smaller) with a small buffer.
-                const transferAmount = Math.max(0, Math.min(perpValue, this.MIN_USDC_TO_BUY) - 0.01);
-                if (transferAmount > 0) {
+            if (perpValue > 0) {
+                // Transfer as much as possible (minus small buffer) so spot bot can operate.
+                const transferAmount = Math.max(0, perpValue - 0.01);
+                if (transferAmount >= 0.01) {
                     console.log(`[Engine] 🔁 Moving $${transferAmount.toFixed(2)} USDC from Perp -> Spot (wallet split)`); 
                     await exchangeClient.usdClassTransfer({ amount: transferAmount.toFixed(2), toPerp: false });
-                    // Re-fetch spot after transfer
-                    const spotAfter = await this.infoClient.spotClearinghouseState({ user: agentAddress });
-                    const usdcAfter = spotAfter.balances.find((b: any) => b.coin === this.QUOTE_COIN);
-                    const usdcAfterTotal = usdcAfter ? parseFloat(usdcAfter.total) : 0;
-                    const usdcAfterHold = usdcAfter ? parseFloat(usdcAfter.hold) : 0;
-                    const usdcAfterAvailable = Math.max(0, usdcAfterTotal - usdcAfterHold);
-                    console.log(`[Engine] ✅ Spot USDC after transfer: ${usdcAfterAvailable.toFixed(4)}`);
                 }
             }
         }
 
+        // Re-fetch spot after any transfer/cleanup
+        const spot2 = await this.infoClient.spotClearinghouseState({ user: agentAddress });
+        const usdc2 = spot2.balances.find((b: any) => b.coin === this.QUOTE_COIN);
+        const hype2 = spot2.balances.find((b: any) => b.coin === this.BASE_COIN);
+        const usdc2Total = usdc2 ? parseFloat(usdc2.total) : 0;
+        const usdc2Hold = usdc2 ? parseFloat(usdc2.hold) : 0;
+        const usdc2Available = Math.max(0, usdc2Total - usdc2Hold);
+        const hype2Total = hype2 ? parseFloat(hype2.total) : 0;
+        const hype2Hold = hype2 ? parseFloat(hype2.hold) : 0;
+        const hype2Available = Math.max(0, hype2Total - hype2Hold);
+        const hype2EntryNtl = hype2 ? parseFloat(hype2.entryNtl) : 0;
+        const avgEntry2 = hype2Total > 0 ? hype2EntryNtl / hype2Total : 0;
+        const hypeAvailableFinal = hype2Available;
+        const usdcAvailableFinal = usdc2Available;
+        const avgEntryFinal = avgEntry2;
+        console.log(`[Engine] 📦 Final spot balances -> USDC: ${usdcAvailableFinal.toFixed(4)} | ${this.BASE_COIN}: ${hypeAvailableFinal.toFixed(6)}`);
+
         // TAKE PROFIT: if we hold HYPE and price >= avgEntry * 1.01, sell.
-        const takeProfitPx = avgEntry > 0 ? avgEntry * (1 + this.TAKE_PROFIT_PCT) : 0;
-        if (hypeAvailable > 0 && takeProfitPx > 0 && market.price >= takeProfitPx) {
+        const takeProfitPx = avgEntryFinal > 0 ? avgEntryFinal * (1 + this.TAKE_PROFIT_PCT) : 0;
+        if (hypeAvailableFinal > 0 && takeProfitPx > 0 && market.price >= takeProfitPx) {
             const now = Date.now();
             const lastSell = this.lastSellAtByAgent.get(agentAddress) ?? 0;
             if (now - lastSell < this.SELL_COOLDOWN_MS) {
                 console.log('[Engine] ⏭️  Sell cooldown active, skipping');
             } else {
-                const sellNotional = hypeAvailable * market.price;
+                const sellNotional = hypeAvailableFinal * market.price;
                 if (sellNotional < this.MIN_USDC_TO_BUY) {
                     console.log(`[Engine] ⏭️  Sell notional too small ($${sellNotional.toFixed(2)}), skipping`);
                 } else {
-                    const sellSizeStr = this.formatDecimal(hypeAvailable, market.hypeSzDecimals);
+                    const sellSizeStr = this.formatDecimal(hypeAvailableFinal, market.hypeSzDecimals);
                     console.log(`[Engine] ✅ Take profit triggered. Selling ${sellSizeStr} ${this.BASE_COIN} @ ${market.priceStr}`);
                     await exchangeClient.order({
                         orders: [
@@ -181,7 +194,7 @@ export class TradingEngine {
         }
 
         // DCA BUY: if USDC available >= $10, buy $10 worth at mid/mark.
-        if (usdcAvailable >= this.MIN_USDC_TO_BUY) {
+        if (usdcAvailableFinal >= this.MIN_USDC_TO_BUY) {
             const now = Date.now();
             const lastBuy = this.lastBuyAtByAgent.get(agentAddress) ?? 0;
             if (now - lastBuy < this.BUY_COOLDOWN_MS) {
@@ -190,7 +203,7 @@ export class TradingEngine {
             }
 
             // Fixed DCA size: $10 (or all available if just above min)
-            const buyNotional = Math.min(usdcAvailable, this.MIN_USDC_TO_BUY);
+            const buyNotional = Math.min(usdcAvailableFinal, this.MIN_USDC_TO_BUY);
             const buySize = buyNotional / market.price;
             const buySizeStr = this.formatDecimal(buySize, market.hypeSzDecimals);
             if (!buySizeStr || parseFloat(buySizeStr) <= 0) {
@@ -213,6 +226,55 @@ export class TradingEngine {
                 grouping: 'na',
             });
             this.lastBuyAtByAgent.set(agentAddress, now);
+        }
+    }
+
+    private async closeAllPerpPositionsIfAny(agentAddress: string, exchangeClient: ExchangeClient) {
+        const perp = await this.infoClient.clearinghouseState({ user: agentAddress });
+        const openPositions = perp.assetPositions?.filter((p: any) => parseFloat(p.position.szi) !== 0) || [];
+        if (openPositions.length === 0) return;
+
+        console.log(`[Engine] 🧹 Legacy PERP positions detected (${openPositions.length}). Closing to comply with Halal spot-only mandate.`);
+
+        const [meta, assetCtxs] = await this.infoClient.metaAndAssetCtxs();
+        const universe = meta?.universe || [];
+
+        for (const pos of openPositions) {
+            const coin = pos.position.coin as string;
+            const szi = parseFloat(pos.position.szi);
+            const size = Math.abs(szi);
+            if (!Number.isFinite(size) || size <= 0) continue;
+
+            const assetIndex = universe.findIndex((u: any) => u.name === coin);
+            if (assetIndex < 0) {
+                console.log(`[Engine] ⚠️  Unknown perp asset ${coin}, skipping close`);
+                continue;
+            }
+
+            const ctx = assetCtxs?.[assetIndex] as any;
+            const priceStr = (ctx?.midPx ?? ctx?.markPx ?? '').toString();
+            if (!priceStr) {
+                console.log(`[Engine] ⚠️  Missing price for ${coin}, skipping close`);
+                continue;
+            }
+
+            // close short -> buy, close long -> sell
+            const isBuy = szi < 0;
+            console.log(`[Engine] 🛑 Closing PERP ${coin}: ${size} (${isBuy ? 'BUY' : 'SELL'}) @ ${priceStr}`);
+
+            await exchangeClient.order({
+                orders: [
+                    {
+                        a: assetIndex,
+                        b: isBuy,
+                        p: priceStr,
+                        s: size.toString(),
+                        r: true,
+                        t: { limit: { tif: 'FrontendMarket' } },
+                    },
+                ],
+                grouping: 'na',
+            });
         }
     }
 
