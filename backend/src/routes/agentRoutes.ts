@@ -144,6 +144,27 @@ router.post('/strategy', async (req: Request, res: Response): Promise<void> => {
     }
 });
 
+// POST /agent/withdraw - Withdraw funds from Hyperliquid to user's wallet
+router.post('/withdraw', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { worldWalletAddress, amount } = req.body;
+
+        if (!worldWalletAddress) {
+            res.status(400).json({ error: 'worldWalletAddress is required' });
+            return;
+        }
+
+        const result = await AgentService.withdrawAgent(worldWalletAddress, amount);
+        res.json(result);
+    } catch (error) {
+        console.error('[Route] ❌ Error withdrawing funds:', error);
+        res.status(500).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Failed to withdraw'
+        });
+    }
+});
+
 // POST /agent/authorize
 router.post('/authorize', async (req: Request, res: Response): Promise<void> => {
     try {

@@ -1,52 +1,63 @@
 // Trading Engine for HyperWorld
-// Implements funding rate arbitrage strategy for "Safe" agents
+// Strictly spot trading (no perps), no leverage, no shorting.
+// Strategy: HYPE/USDC DCA buys + 1% take-profit sells.
 
 import { prisma } from '../db.js';
 import { decrypt } from '../utils/encryption.js';
 import { ethers } from 'ethers';
 import { InfoClient, ExchangeClient, HttpTransport } from '@nktkas/hyperliquid';
 
+type SpotMarketInfo = {
+    marketAssetId: number; // spot market index (typically 10000+)
+    hypeTokenIndex: number;
+    usdcTokenIndex: number;
+    hypeSzDecimals: number;
+    priceStr: string; // midPx or markPx string from spot ctx
+    price: number;
+};
+
 export class TradingEngine {
     private intervalId: NodeJS.Timeout | null = null;
-    private isRunning: boolean = false;
+    private isRunning = false;
     private infoClient: InfoClient;
-    private readonly FUNDING_THRESHOLD = 0; // Always trade when balance is sufficient
-    private readonly MIN_BALANCE = 10; // 10 USDC minimum (Hyperliquid min order)
-    private readonly MIN_ORDER_USD = 10; // Hyperliquid min order notional
-    private readonly LOOP_INTERVAL = 60000; // 60 seconds
+
+    // Strategy params
+    private readonly LOOP_INTERVAL_MS = 60_000;
+    private readonly BASE_COIN = 'HYPE';
+    private readonly QUOTE_COIN = 'USDC';
+    private readonly MIN_USDC_TO_BUY = 10; // Hyperliquid min notional is ~$10
+    private readonly TAKE_PROFIT_PCT = 0.01; // +1%
+    private readonly BUY_COOLDOWN_MS = 10 * 60_000;
+    private readonly SELL_COOLDOWN_MS = 5 * 60_000;
+
+    // In-memory throttles to avoid spamming orders
+    private lastBuyAtByAgent: Map<string, number> = new Map();
+    private lastSellAtByAgent: Map<string, number> = new Map();
+
+    // Cache spot meta/ctxs for a short period
+    private spotMarketCache: { at: number; info: SpotMarketInfo } | null = null;
+    private readonly SPOT_CACHE_TTL_MS = 30_000;
 
     constructor() {
         const transport = new HttpTransport();
         this.infoClient = new InfoClient({ transport });
     }
 
-    /**
-     * Start the trading engine
-     */
     start() {
         if (this.isRunning) {
             console.log('[Engine] ⚠️  Already running');
             return;
         }
-
-        console.log('[Engine] 🚀 Starting Trading Engine...');
-        console.log('[Engine] 📊 Strategy: Funding Rate Arbitrage');
-        console.log('[Engine] ⏱️  Loop Interval: 60 seconds');
-
         this.isRunning = true;
+        console.log('[Engine] 🚀 Starting Trading Engine...');
+        console.log('[Engine] 📈 Mode: Spot Trading');
+        console.log(`[Engine] 🎯 Pair: ${this.BASE_COIN}/${this.QUOTE_COIN}`);
+        console.log(`[Engine] ⏱️  Loop Interval: ${Math.round(this.LOOP_INTERVAL_MS / 1000)}s`);
 
-        // Run immediately on start
-        this.executeLoop();
-
-        // Then run every 60 seconds
-        this.intervalId = setInterval(() => {
-            this.executeLoop();
-        }, this.LOOP_INTERVAL);
+        void this.executeLoop();
+        this.intervalId = setInterval(() => void this.executeLoop(), this.LOOP_INTERVAL_MS);
     }
 
-    /**
-     * Stop the trading engine
-     */
     stop() {
         if (this.intervalId) {
             clearInterval(this.intervalId);
@@ -56,513 +67,210 @@ export class TradingEngine {
         console.log('[Engine] 🛑 Trading Engine stopped');
     }
 
-    /**
-     * Main execution loop
-     */
+    getStatus() {
+        return {
+            isRunning: this.isRunning,
+            intervalMs: this.LOOP_INTERVAL_MS,
+            mode: 'halal-spot',
+            pair: `${this.BASE_COIN}/${this.QUOTE_COIN}`,
+            minBuyUsdc: this.MIN_USDC_TO_BUY,
+            takeProfitPct: this.TAKE_PROFIT_PCT,
+        };
+    }
+
     private async executeLoop() {
         try {
             console.log('[Engine] 🔄 Starting execution cycle...');
 
-            // Step A: Market Check - Get funding rate
-            const fundingRate = await this.getFundingRate('ETH');
+            const market = await this.getSpotMarketInfo();
+            console.log(`[Engine] 📈 ${this.BASE_COIN} price: ${market.priceStr} ${this.QUOTE_COIN}`);
 
-            console.log(`[Engine] 📈 Current ETH funding rate: ${(fundingRate * 100).toFixed(4)}%`);
-
-            // Exit logic runs every loop.
-            await this.handleExitLogic(fundingRate);
-
-            // Check if funding is above threshold (positive = shorts get paid)
-            if (fundingRate <= this.FUNDING_THRESHOLD) {
-                console.log(`[Engine] ⏭️  Funding too low (threshold: ${(this.FUNDING_THRESHOLD * 100).toFixed(4)}%), skipping cycle`);
-                return;
-            }
-
-            console.log('[Engine] ✅ Funding rate favorable for short positions');
-
-            // Step B: Agent Retrieval - Get all active "Safe" agents
-            const agents = await this.getActiveAgents();
-
-            if (agents.length === 0) {
-                console.log('[Engine] 📭 No active agents found');
-                return;
-            }
-
+            // Fetch active agents only ( engine trades only when active)
+            const agents = await prisma.agent.findMany({ where: { isActive: true } });
             console.log(`[Engine] 👥 Found ${agents.length} active agent(s)`);
-
-            // Step C: Execution - Loop through each agent
-            for (const agent of agents) {
-                await this.executeAgentStrategy(agent, fundingRate);
-            }
-
-            console.log('[Engine] ✅ Execution cycle complete');
-
-        } catch (error) {
-            console.error('[Engine] ❌ Error in execution loop:', error);
-            // Don't crash the engine, just log and continue
-        }
-    }
-
-    /**
-     * Get the current funding rate for a given coin
-     * Uses multiple methods with fallbacks for resilience
-     * Returns 0 (neutral) if all methods fail to prevent engine crashes
-     */
-    private async getFundingRate(coin: string): Promise<number> {
-        try {
-            console.log(`[Engine] 🔍 Fetching funding rate for ${coin}...`);
-
-            // Method 1: Try metaAndAssetCtxs (most reliable for current funding)
-            try {
-                const metaAndAssetCtxs = await this.infoClient.metaAndAssetCtxs();
-                console.log('[Engine] 📊 Raw meta response received');
-
-                // Find the coin asset in the universe
-                const universe = metaAndAssetCtxs[0]?.universe;
-                if (universe) {
-                    const asset = universe.find((u: any) => u.name === coin);
-                    if (asset && 'funding' in asset) {
-                        const fundingRate = parseFloat((asset as any).funding || '0');
-                        console.log(`[Engine] ✅ Funding rate from meta: ${(fundingRate * 100).toFixed(4)}%`);
-                        return fundingRate;
-                    }
-                }
-                console.log('[Engine] ⚠️  No funding rate in meta response');
-            } catch (metaError) {
-                console.warn('[Engine] ⚠️  metaAndAssetCtxs failed:', metaError);
-            }
-
-            // Method 2: Try fundingHistory as fallback
-            try {
-                const history = await this.infoClient.fundingHistory({
-                    coin: coin,
-                    startTime: Date.now() - (24 * 60 * 60 * 1000), // Last 24 hours
-                });
-
-                console.log('[Engine] 📊 Raw funding history length:', history?.length || 0);
-
-                if (Array.isArray(history) && history.length > 0) {
-                    // Get the most recent funding rate
-                    const latestFunding = history[history.length - 1];
-                    if (latestFunding && 'fundingRate' in latestFunding) {
-                        const fundingRate = parseFloat(latestFunding.fundingRate);
-                        console.log(`[Engine] ✅ Funding rate from history: ${(fundingRate * 100).toFixed(4)}%`);
-                        return fundingRate;
-                    }
-                }
-                console.log('[Engine] ⚠️  No funding history available');
-            } catch (historyError) {
-                console.warn('[Engine] ⚠️  fundingHistory failed:', historyError);
-            }
-
-            // If all methods fail, return 0 (neutral) with warning
-            console.warn(`[Engine] ⚠️  Could not fetch funding rate for ${coin}, returning 0 (neutral)`);
-            return 0;
-
-        } catch (error) {
-            console.error(`[Engine] ❌ Critical error fetching funding rate:`, error);
-            // Return 0 instead of null to prevent engine crashes
-            return 0;
-        }
-    }
-
-    /**
-     * Get all active agents with "Safe" strategy
-     */
-    private async getActiveAgents() {
-        try {
-            const agents = await prisma.agent.findMany({
-                where: {
-                    isActive: true,
-                },
-            });
-
-            // Filter for "Safe"/"Conservative" strategy
-            return agents.filter(agent => {
-                try {
-                    const config = JSON.parse(agent.strategyConfig);
-                    return config.risk === 'Conservative' || config.risk === 'Safe';
-                } catch {
-                    return false;
-                }
-            });
-
-        } catch (error) {
-            console.error('[Engine] ❌ Error fetching agents:', error);
-            return [];
-        }
-    }
-
-    /**
-     * Execute strategy for a single agent
-     */
-    private async executeAgentStrategy(agent: {
-        id: number;
-        walletAddress: string;
-        encryptedPrivateKey: string;
-        strategyConfig: string;
-    }, fundingRate: number) {
-        try {
-            console.log(`[Engine] 🤖 Processing agent ${agent.id} (${agent.walletAddress})`);
-
-            // Parse strategy config
-            const config = JSON.parse(agent.strategyConfig);
-            const strategy = config.risk || 'Conservative';
-            const leverage = config.leverage || 1;
-
-            console.log(`[Engine] 📋 Strategy: ${strategy}, Leverage: ${leverage}x`);
-
-            // Decrypt private key
-            const privateKey = decrypt(agent.encryptedPrivateKey);
-            const wallet = new ethers.Wallet(privateKey);
-
-            // Initialize ExchangeClient for this agent
-            const transport = new HttpTransport();
-            const exchangeClient = new ExchangeClient({ transport, wallet });
-
-            // Check balance (perp clearinghouse account value holds deposits)
-            const clearinghouse = await this.infoClient.clearinghouseState({
-                user: agent.walletAddress
-            });
-
-            const accountValue = clearinghouse?.marginSummary?.accountValue;
-            const balance = accountValue ? parseFloat(accountValue) : 0;
-
-            console.log(`[Engine] 💰 Agent balance: ${balance.toFixed(2)} USDC`);
-
-            if (balance < this.MIN_BALANCE) {
-                console.log(`[Engine] ⏭️  Insufficient balance (min: ${this.MIN_BALANCE} USDC)`);
-                return;
-            }
-
-            // Check for existing positions
-            const positions = await this.infoClient.clearinghouseState({
-                user: agent.walletAddress
-            });
-
-            const hasOpenPositions = positions.assetPositions?.some(
-                (p: any) => parseFloat(p.position.szi) !== 0
-            );
-
-            if (hasOpenPositions) {
-                console.log(`[Engine] ⏭️  Agent has open positions, skipping`);
-                return;
-            }
-
-            // Execute strategy based on type
-            if (strategy === 'Aggressive') {
-                await this.executeAggressiveStrategy(exchangeClient, balance, leverage);
-            } else {
-                // Conservative/Safe strategy - funding rate arbitrage
-                await this.executeConservativeStrategy(exchangeClient, balance, fundingRate, leverage);
-            }
-
-        } catch (error) {
-            console.error(`[Engine] ❌ Error executing strategy for agent ${agent.id}:`, error);
-            // Continue to next agent even if this one fails
-        }
-    }
-
-    private async handleExitLogic(fundingRate: number) {
-        try {
-            const agents = await prisma.agent.findMany();
             if (agents.length === 0) return;
 
             for (const agent of agents) {
-                const positions = await this.infoClient.clearinghouseState({
-                    user: agent.walletAddress
-                });
-
-                const openPositions = positions.assetPositions?.filter(
-                    (p: any) => parseFloat(p.position.szi) !== 0
-                ) || [];
-
-                if (openPositions.length === 0) continue;
-
-                if (fundingRate < 0) {
-                    console.log(`[Engine] 🛑 Closing position: Funding went negative (${(fundingRate * 100).toFixed(4)}%)`);
-                    await this.closeAllPositions(agent, openPositions);
-                    continue;
-                }
-
-                if (!agent.isActive) {
-                    console.log('[Engine] 🛑 Closing position: Agent is inactive');
-                    await this.closeAllPositions(agent, openPositions);
-                }
+                await this.executeAgentSpotStrategy(agent.walletAddress, agent.encryptedPrivateKey, market);
             }
+
+            console.log('[Engine] ✅ Execution cycle complete');
         } catch (error) {
-            console.error('[Engine] ❌ Error in exit logic:', error);
+            console.error('[Engine] ❌ Error in execution loop:', error);
         }
     }
 
-    private async closeAllPositions(
-        agent: { walletAddress: string; encryptedPrivateKey: string },
-        openPositions: any[]
-    ) {
-        const privateKey = decrypt(agent.encryptedPrivateKey);
-        const wallet = new ethers.Wallet(privateKey);
+    private async executeAgentSpotStrategy(agentAddress: string, encryptedPrivateKey: string, market: SpotMarketInfo) {
+        console.log(`[Engine] 🤖 Processing agent (${agentAddress})`);
+
+        const spot = await this.infoClient.spotClearinghouseState({ user: agentAddress });
+        const usdc = spot.balances.find((b: any) => b.coin === this.QUOTE_COIN);
+        const hype = spot.balances.find((b: any) => b.coin === this.BASE_COIN);
+
+        const usdcTotal = usdc ? parseFloat(usdc.total) : 0;
+        const usdcHold = usdc ? parseFloat(usdc.hold) : 0;
+        const usdcAvailable = Math.max(0, usdcTotal - usdcHold);
+
+        const hypeTotal = hype ? parseFloat(hype.total) : 0;
+        const hypeHold = hype ? parseFloat(hype.hold) : 0;
+        const hypeAvailable = Math.max(0, hypeTotal - hypeHold);
+
+        const hypeEntryNtl = hype ? parseFloat(hype.entryNtl) : 0; // USDC notional for position cost basis
+        const avgEntry = hypeTotal > 0 ? hypeEntryNtl / hypeTotal : 0;
+
+        console.log(`[Engine] 💵 Spot USDC: ${usdcAvailable.toFixed(4)} | ${this.BASE_COIN}: ${hypeAvailable.toFixed(6)}`);
+        if (hypeTotal > 0 && avgEntry > 0) {
+            console.log(`[Engine] 📌 Avg entry: ${avgEntry.toFixed(4)} ${this.QUOTE_COIN}`);
+        }
+
+        const wallet = new ethers.Wallet(decrypt(encryptedPrivateKey));
         const transport = new HttpTransport();
         const exchangeClient = new ExchangeClient({ transport, wallet });
 
-        for (const pos of openPositions) {
-            try {
-                const coin = pos.position.coin as string;
-                const size = Math.abs(parseFloat(pos.position.szi));
-                if (!Number.isFinite(size) || size <= 0) continue;
-
-                const marketPrice = await this.getMarketPrice(coin);
-                if (!marketPrice || !marketPrice.priceStr) {
-                    console.log(`[Engine] ⚠️  Unable to fetch price for ${coin}, skipping close`);
-                    continue;
+        // Wallet split fix: if Spot USDC is low but Perp account has USDC, transfer Perp -> Spot.
+        if (usdcAvailable < this.MIN_USDC_TO_BUY) {
+            const perp = await this.infoClient.clearinghouseState({ user: agentAddress });
+            const perpValue = parseFloat(perp?.marginSummary?.accountValue || '0');
+            if (perpValue >= this.MIN_USDC_TO_BUY) {
+                // Transfer up to MIN_USDC_TO_BUY (or all perp value if smaller) with a small buffer.
+                const transferAmount = Math.max(0, Math.min(perpValue, this.MIN_USDC_TO_BUY) - 0.01);
+                if (transferAmount > 0) {
+                    console.log(`[Engine] 🔁 Moving $${transferAmount.toFixed(2)} USDC from Perp -> Spot (wallet split)`); 
+                    await exchangeClient.usdClassTransfer({ amount: transferAmount.toFixed(2), toPerp: false });
+                    // Re-fetch spot after transfer
+                    const spotAfter = await this.infoClient.spotClearinghouseState({ user: agentAddress });
+                    const usdcAfter = spotAfter.balances.find((b: any) => b.coin === this.QUOTE_COIN);
+                    const usdcAfterTotal = usdcAfter ? parseFloat(usdcAfter.total) : 0;
+                    const usdcAfterHold = usdcAfter ? parseFloat(usdcAfter.hold) : 0;
+                    const usdcAfterAvailable = Math.max(0, usdcAfterTotal - usdcAfterHold);
+                    console.log(`[Engine] ✅ Spot USDC after transfer: ${usdcAfterAvailable.toFixed(4)}`);
                 }
-
-                const priceTick = this.getPriceTick(coin);
-                const orderPrice = this.roundToTick(marketPrice.price, priceTick);
-                const orderPriceStr = this.formatDecimal(orderPrice, this.tickToDecimals(priceTick));
-
-                await exchangeClient.order({
-                    orders: [
-                        {
-                            a: marketPrice.assetIndex,
-                            b: parseFloat(pos.position.szi) < 0, // close short -> buy, close long -> sell
-                            p: orderPriceStr,
-                            s: size.toString(),
-                            r: true,
-                            t: { limit: { tif: 'FrontendMarket' } },
-                        }
-                    ],
-                    grouping: 'na',
-                });
-
-                console.log(`[Engine] ✅ Closed ${coin} position (${size.toString()})`);
-            } catch (error) {
-                console.error(`[Engine] ❌ Failed to close position for ${pos.position.coin}:`, error);
             }
         }
-    }
 
-    /**
-     * Execute conservative strategy (funding rate arbitrage)
-     */
-    private async executeConservativeStrategy(
-        exchangeClient: ExchangeClient,
-        balance: number,
-        fundingRate: number,
-        leverage: number
-    ) {
-        console.log(`[Engine] 📉 Executing CONSERVATIVE strategy (funding arbitrage)...`);
-
-        const marketPrice = await this.getMarketPrice('ETH');
-        if (
-            !marketPrice ||
-            marketPrice.assetIndex == null ||
-            !marketPrice.priceStr ||
-            !Number.isFinite(marketPrice.price) ||
-            marketPrice.price <= 0
-        ) {
-            console.log('[Engine] ⚠️  Unable to fetch ETH price, skipping');
-            return;
-        }
-
-        // Use 90% of balance as notional, convert to ETH size.
-        let notionalUsd = balance * 0.9 * leverage;
-        if (notionalUsd < this.MIN_ORDER_USD) {
-            console.log(`[Engine] ⏭️  Order notional too small ($${notionalUsd.toFixed(2)} < $${this.MIN_ORDER_USD})`);
-            return;
-        }
-        const sizeEth = notionalUsd / marketPrice.price;
-        const sizeDecimals = await this.getSizeDecimals('ETH');
-        const positionSize = this.formatDecimal(sizeEth, sizeDecimals);
-
-        if (!Number.isFinite(sizeEth) || parseFloat(positionSize) <= 0) {
-            console.log('[Engine] ⚠️  Position size too small, skipping');
-            return;
-        }
-
-        const priceTick = this.getPriceTick('ETH');
-        const orderPrice = this.roundToTick(marketPrice.price, priceTick);
-        const orderPriceStr = this.formatDecimal(orderPrice, this.tickToDecimals(priceTick));
-
-        if (!Number.isFinite(orderPrice) || orderPrice <= 0) {
-            console.log('[Engine] ⚠️  Invalid order price, skipping');
-            return;
-        }
-        console.log(`[Engine] 🧮 midPx=${marketPrice.priceStr} price=${orderPriceStr} size=${positionSize}`);
-
-        // Place market SHORT order (to receive funding)
-        const order = await exchangeClient.order({
-            orders: [
-                {
-                    a: marketPrice.assetIndex, // Asset index for ETH
-                    b: false, // is_buy = false (SHORT)
-                    p: orderPriceStr,
-                    s: positionSize, // Size
-                    r: false, // reduce_only
-                    t: { limit: { tif: 'FrontendMarket' } }, // Market-style
+        // TAKE PROFIT: if we hold HYPE and price >= avgEntry * 1.01, sell.
+        const takeProfitPx = avgEntry > 0 ? avgEntry * (1 + this.TAKE_PROFIT_PCT) : 0;
+        if (hypeAvailable > 0 && takeProfitPx > 0 && market.price >= takeProfitPx) {
+            const now = Date.now();
+            const lastSell = this.lastSellAtByAgent.get(agentAddress) ?? 0;
+            if (now - lastSell < this.SELL_COOLDOWN_MS) {
+                console.log('[Engine] ⏭️  Sell cooldown active, skipping');
+            } else {
+                const sellNotional = hypeAvailable * market.price;
+                if (sellNotional < this.MIN_USDC_TO_BUY) {
+                    console.log(`[Engine] ⏭️  Sell notional too small ($${sellNotional.toFixed(2)}), skipping`);
+                } else {
+                    const sellSizeStr = this.formatDecimal(hypeAvailable, market.hypeSzDecimals);
+                    console.log(`[Engine] ✅ Take profit triggered. Selling ${sellSizeStr} ${this.BASE_COIN} @ ${market.priceStr}`);
+                    await exchangeClient.order({
+                        orders: [
+                            {
+                                a: market.marketAssetId,
+                                b: false, // SELL
+                                p: market.priceStr,
+                                s: sellSizeStr,
+                                r: false,
+                                t: { limit: { tif: 'Gtc' } },
+                            },
+                        ],
+                        grouping: 'na',
+                    });
+                    this.lastSellAtByAgent.set(agentAddress, now);
                 }
-            ],
-            grouping: 'na',
-        });
+            }
+        }
 
-        console.log(`[Engine] ✅ Conservative order executed:`, order);
-        console.log(`[Engine] 📊 Expected funding yield: ${(fundingRate * 100).toFixed(4)}% per 8 hours`);
+        // DCA BUY: if USDC available >= $10, buy $10 worth at mid/mark.
+        if (usdcAvailable >= this.MIN_USDC_TO_BUY) {
+            const now = Date.now();
+            const lastBuy = this.lastBuyAtByAgent.get(agentAddress) ?? 0;
+            if (now - lastBuy < this.BUY_COOLDOWN_MS) {
+                console.log('[Engine] ⏭️  Buy cooldown active, skipping');
+                return;
+            }
+
+            // Fixed DCA size: $10 (or all available if just above min)
+            const buyNotional = Math.min(usdcAvailable, this.MIN_USDC_TO_BUY);
+            const buySize = buyNotional / market.price;
+            const buySizeStr = this.formatDecimal(buySize, market.hypeSzDecimals);
+            if (!buySizeStr || parseFloat(buySizeStr) <= 0) {
+                console.log('[Engine] ⚠️  Computed buy size invalid, skipping');
+                return;
+            }
+
+            console.log(`[Engine] 🟦 DCA buy: $${buyNotional.toFixed(2)} -> ${buySizeStr} ${this.BASE_COIN} @ ${market.priceStr}`);
+            await exchangeClient.order({
+                orders: [
+                    {
+                        a: market.marketAssetId,
+                        b: true, // BUY
+                        p: market.priceStr,
+                        s: buySizeStr,
+                        r: false,
+                        t: { limit: { tif: 'Gtc' } },
+                    },
+                ],
+                grouping: 'na',
+            });
+            this.lastBuyAtByAgent.set(agentAddress, now);
+        }
     }
 
-    /**
-     * Execute aggressive strategy (momentum-based trading)
-     */
-    private async executeAggressiveStrategy(
-        exchangeClient: ExchangeClient,
-        balance: number,
-        leverage: number
-    ) {
-        console.log(`[Engine] ⚡ Executing AGGRESSIVE strategy (momentum trading)...`);
-
-        // 1. Get recent candles for momentum calculation
-        const candles = await this.infoClient.candleSnapshot({
-            coin: 'ETH',
-            interval: '15m',
-            startTime: Date.now() - (4 * 60 * 60 * 1000), // Last 4 hours
-        });
-
-        if (candles.length < 2) {
-            console.log(`[Engine] ⚠️  Not enough data for momentum calculation`);
-            return;
+    private async getSpotMarketInfo(): Promise<SpotMarketInfo> {
+        const now = Date.now();
+        if (this.spotMarketCache && now - this.spotMarketCache.at < this.SPOT_CACHE_TTL_MS) {
+            return this.spotMarketCache.info;
         }
 
-        // 2. Calculate price momentum (% change from 2 candles ago)
-        const currentCandle = candles[candles.length - 1];
-        if (!currentCandle) {
-            console.log(`[Engine] ⚠️  No current candle data`);
-            return;
+        const [meta, assetCtxs] = await this.infoClient.spotMetaAndAssetCtxs();
+
+        const hypeToken = meta.tokens.find((t: any) => t.name === this.BASE_COIN);
+        const usdcToken = meta.tokens.find((t: any) => t.name === this.QUOTE_COIN);
+        if (!hypeToken) throw new Error(`Spot token not found: ${this.BASE_COIN}`);
+        if (!usdcToken) throw new Error(`Spot token not found: ${this.QUOTE_COIN}`);
+
+        // Find spot market (universe) for HYPE/USDC.
+        // Prefer name match; fallback to token set match.
+        let marketIdx = meta.universe.findIndex((u: any) =>
+            typeof u?.name === 'string' &&
+            u.name.toUpperCase().includes(this.BASE_COIN) &&
+            u.name.toUpperCase().includes(this.QUOTE_COIN)
+        );
+        if (marketIdx < 0) {
+            marketIdx = meta.universe.findIndex((u: any) => {
+                const tokens = Array.isArray(u?.tokens) ? u.tokens : [];
+                return tokens.includes(hypeToken.index) && tokens.includes(usdcToken.index);
+            });
+        }
+        if (marketIdx < 0) {
+            throw new Error(`Spot market not found for ${this.BASE_COIN}/${this.QUOTE_COIN}`);
         }
 
-        const currentPrice = parseFloat(currentCandle.c);
-        const previousCandle = candles[candles.length - 3] || candles[candles.length - 2];
-        if (!previousCandle) {
-            console.log(`[Engine] ⚠️  No previous candle data`);
-            return;
+        const universeEntry = meta.universe[marketIdx];
+        if (!universeEntry) {
+            throw new Error(`Spot market entry missing at index ${marketIdx}`);
         }
+        const marketAssetId = universeEntry.index; // 10000+ style asset id for spot markets
 
-        const previousPrice = parseFloat(previousCandle.c);
-        const momentum = ((currentPrice - previousPrice) / previousPrice) * 100;
+        // Spot context list aligns with universe ordering in spotMetaAndAssetCtxs.
+        // For price, use ctx.midPx if present, else markPx.
+        const ctx = assetCtxs?.[marketIdx] as any;
+        const priceStrRaw = (ctx?.midPx ?? ctx?.markPx ?? '').toString();
+        if (!priceStrRaw) throw new Error('Missing spot price for market');
+        const price = parseFloat(priceStrRaw);
+        if (!Number.isFinite(price) || price <= 0) throw new Error('Invalid spot price');
 
-        console.log(`[Engine] 📈 Price momentum: ${momentum.toFixed(2)}%`);
-
-        // 3. Determine direction based on momentum
-        let direction: 'LONG' | 'SHORT' | null = null;
-
-        if (momentum > 0.5) {
-            direction = 'LONG';
-            console.log(`[Engine] 🚀 Strong upward momentum - going LONG`);
-        } else if (momentum < -0.5) {
-            direction = 'SHORT';
-            console.log(`[Engine] 📉 Strong downward momentum - going SHORT`);
-        } else {
-            console.log(`[Engine] ⏭️  Momentum too weak (${momentum.toFixed(2)}%), skipping`);
-            return;
-        }
-
-        const marketPrice = await this.getMarketPrice('ETH');
-        if (
-            !marketPrice ||
-            marketPrice.assetIndex == null ||
-            !marketPrice.priceStr ||
-            !Number.isFinite(marketPrice.price) ||
-            marketPrice.price <= 0
-        ) {
-            console.log('[Engine] ⚠️  Unable to fetch ETH price, skipping');
-            return;
-        }
-
-        // 4. Calculate position size with leverage (USD -> ETH)
-        let notionalUsd = balance * 0.9 * leverage;
-        if (notionalUsd < this.MIN_ORDER_USD) {
-            console.log(`[Engine] ⏭️  Order notional too small ($${notionalUsd.toFixed(2)} < $${this.MIN_ORDER_USD})`);
-            return;
-        }
-        const sizeEth = notionalUsd / marketPrice.price;
-        const sizeDecimals = await this.getSizeDecimals('ETH');
-        const positionSize = this.formatDecimal(sizeEth, sizeDecimals);
-
-        if (!Number.isFinite(sizeEth) || parseFloat(positionSize) <= 0) {
-            console.log('[Engine] ⚠️  Position size too small, skipping');
-            return;
-        }
-
-        console.log(`[Engine] 💰 Position size: ${positionSize} ETH (~$${notionalUsd.toFixed(2)})`);
-
-        const priceTick = this.getPriceTick('ETH');
-        const orderPrice = this.roundToTick(marketPrice.price, priceTick);
-        const orderPriceStr = this.formatDecimal(orderPrice, this.tickToDecimals(priceTick));
-
-        if (!Number.isFinite(orderPrice) || orderPrice <= 0) {
-            console.log('[Engine] ⚠️  Invalid order price, skipping');
-            return;
-        }
-        console.log(`[Engine] 🧮 midPx=${marketPrice.priceStr} price=${orderPriceStr} size=${positionSize}`);
-
-        // 5. Place market order
-        const order = await exchangeClient.order({
-            orders: [
-                {
-                    a: marketPrice.assetIndex, // ETH
-                    b: direction === 'LONG', // is_buy
-                    p: orderPriceStr,
-                    s: positionSize,
-                    r: false, // not reduce_only
-                    t: { limit: { tif: 'FrontendMarket' } },
-                }
-            ],
-            grouping: 'na',
-        });
-
-        console.log(`[Engine] ✅ Aggressive ${direction} order executed:`, order);
-        console.log(`[Engine] 📊 Expected return: >${Math.abs(momentum).toFixed(2)}% with ${leverage}x leverage`);
-    }
-
-    /**
-     * Get engine status
-     */
-    getStatus() {
-        return {
-            isRunning: this.isRunning,
-            interval: this.LOOP_INTERVAL,
-            fundingThreshold: this.FUNDING_THRESHOLD,
-            minBalance: this.MIN_BALANCE,
+        const info: SpotMarketInfo = {
+            marketAssetId,
+            hypeTokenIndex: hypeToken.index,
+            usdcTokenIndex: usdcToken.index,
+            hypeSzDecimals: hypeToken.szDecimals ?? 6,
+            priceStr: priceStrRaw,
+            price,
         };
-    }
 
-    private async getMarketPrice(
-        coin: string
-    ): Promise<{ price: number; priceStr: string; assetIndex: number } | null> {
-        try {
-            const [meta, assetCtxs] = await this.infoClient.metaAndAssetCtxs();
-            const universe = meta?.universe || [];
-            const assetIndex = universe.findIndex((u: any) => u.name === coin);
-            if (assetIndex < 0) return null;
-            const ctx = assetCtxs?.[assetIndex];
-            const priceStr = (ctx?.midPx ?? ctx?.markPx ?? '').toString();
-            if (!priceStr) return null;
-            const price = parseFloat(priceStr);
-            if (!Number.isFinite(price)) return null;
-            return { price, priceStr, assetIndex };
-        } catch (error) {
-            console.warn('[Engine] ⚠️  Failed to fetch market price:', error);
-            return null;
-        }
-    }
-
-    private async getSizeDecimals(coin: string): Promise<number> {
-        try {
-            const meta = await this.infoClient.meta();
-            const universe = meta?.universe || [];
-            const asset = universe.find((u: any) => u.name === coin);
-            if (!asset || typeof asset?.szDecimals !== 'number') return 6;
-            return asset.szDecimals;
-        } catch (error) {
-            console.warn('[Engine] ⚠️  Failed to fetch size decimals:', error);
-            return 6;
-        }
+        this.spotMarketCache = { at: now, info };
+        return info;
     }
 
     private formatDecimal(value: number, decimals: number): string {
@@ -570,21 +278,5 @@ export class TradingEngine {
         const fixed = value.toFixed(decimals);
         return fixed.replace(/\.?0+$/, '');
     }
-
-    private getPriceTick(coin: string): number {
-        // Hyperliquid ETH tick is 0.5; fallback to 0.01 for others.
-        if (coin === 'ETH') return 0.5;
-        return 0.01;
-    }
-
-    private tickToDecimals(tick: number): number {
-        const tickStr = tick.toString();
-        const dot = tickStr.indexOf('.');
-        return dot === -1 ? 0 : tickStr.length - dot - 1;
-    }
-
-    private roundToTick(price: number, tick: number): number {
-        if (!tick || tick <= 0) return Math.floor(price);
-        return Math.floor(price / tick) * tick;
-    }
 }
+

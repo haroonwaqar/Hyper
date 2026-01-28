@@ -7,6 +7,21 @@ const ARBITRUM_RPC = 'https://arb1.arbitrum.io/rpc';
 const ARBITRUM_USDC = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 
 export class AgentService {
+    private static async getAssetIndexAndPrice(infoClient: InfoClient, coin: string): Promise<{ assetIndex: number; priceStr: string }> {
+        const [meta, assetCtxs] = await infoClient.metaAndAssetCtxs();
+        const universe = meta?.universe || [];
+        const assetIndex = universe.findIndex((u: any) => u.name === coin);
+        if (assetIndex < 0) {
+            throw new Error(`Unknown asset ${coin}`);
+        }
+        const ctx = assetCtxs?.[assetIndex];
+        const priceStr = (ctx?.midPx ?? ctx?.markPx ?? '').toString();
+        if (!priceStr) {
+            throw new Error(`Missing price for ${coin}`);
+        }
+        return { assetIndex, priceStr };
+    }
+
     /**
      * Creates a new agent for a user if one doesn't exist.
      * Generates a new random wallet, encrypts the private key, and stores it.
@@ -150,18 +165,19 @@ export class AgentService {
             for (const pos of openPositions) {
                 try {
                     const size = Math.abs(parseFloat(pos.position.szi));
-                    const isBuy = parseFloat(pos.position.szi) < 0; // Close long = sell, close short = buy
+                    const isBuy = parseFloat(pos.position.szi) < 0; // close short -> buy, close long -> sell
 
                     console.log(`[AgentService] ⚡ Closing ${pos.position.coin}: ${size} (${isBuy ? 'BUY' : 'SELL'})`);
 
+                    const { assetIndex, priceStr } = await this.getAssetIndexAndPrice(infoClient, pos.position.coin);
                     await exchangeClient.order({
                         orders: [{
-                            a: pos.position.coin === 'ETH' ? 0 : 1, // Simplified: 0=ETH
+                            a: assetIndex,
                             b: isBuy,
-                            p: '0', // Market order
+                            p: priceStr,
                             s: size.toString(),
                             r: true, // reduce_only = true (closing position)
-                            t: { limit: { tif: 'Ioc' } },
+                            t: { limit: { tif: 'FrontendMarket' } },
                         }],
                         grouping: 'na',
                     });
@@ -223,6 +239,79 @@ export class AgentService {
         console.log('[AgentService] ✅ Agent started');
 
         return { status: 'started' };
+    }
+
+    /**
+     * Withdraw funds from Hyperliquid to the user's wallet.
+     */
+    static async withdrawAgent(worldWalletAddress: string, amount?: string) {
+        console.log('[AgentService] 💸 withdrawAgent called for:', worldWalletAddress);
+
+        const user = await prisma.user.findUnique({
+            where: { worldWalletAddress },
+        });
+
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        const agent = await prisma.agent.findUnique({
+            where: { userId: user.id },
+        });
+
+        if (!agent) {
+            throw new Error('Agent not found');
+        }
+
+        const privateKey = decrypt(agent.encryptedPrivateKey);
+        const wallet = new ethers.Wallet(privateKey);
+        const transport = new HttpTransport();
+        const exchangeClient = new ExchangeClient({ transport, wallet });
+        const infoClient = new InfoClient({ transport });
+
+        // Refuse to withdraw if there are open positions (must stop first).
+        const positions = await infoClient.clearinghouseState({ user: agent.walletAddress });
+        const openPositions = positions.assetPositions?.filter((p: any) => parseFloat(p.position.szi) !== 0) || [];
+        if (openPositions.length > 0) {
+            throw new Error('Agent has open positions. Stop the agent first to close positions before withdrawing.');
+        }
+
+        const state = await infoClient.clearinghouseState({ user: agent.walletAddress });
+        const accountValue = parseFloat(state?.marginSummary?.accountValue || '0');
+        if (!accountValue || accountValue <= 0) {
+            throw new Error('No available balance to withdraw');
+        }
+
+        let withdrawAmount = accountValue;
+        if (amount) {
+            const parsed = parseFloat(amount);
+            if (!Number.isFinite(parsed) || parsed <= 0) {
+                throw new Error('Invalid withdrawal amount');
+            }
+            withdrawAmount = Math.min(parsed, accountValue);
+        }
+
+        // Keep a tiny buffer to avoid full-balance edge cases.
+        withdrawAmount = Math.max(0, withdrawAmount - 0.01);
+        if (withdrawAmount <= 0) {
+            throw new Error('Withdrawal amount too small');
+        }
+
+        // Note: Hyperliquid withdrawals pay out USDC on Arbitrum to the destination address.
+        const res = await exchangeClient.withdraw3({
+            destination: worldWalletAddress,
+            amount: withdrawAmount.toFixed(2),
+        });
+
+        console.log('[AgentService] ✅ Withdrawal initiated');
+
+        return {
+            success: true,
+            amount: withdrawAmount.toFixed(2),
+            destination: worldWalletAddress,
+            response: res,
+            note: 'Withdrawal will arrive as USDC on Arbitrum to your World App wallet address.',
+        };
     }
 
     /**
