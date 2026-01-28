@@ -11,11 +11,13 @@ function sanitizeURL(baseUrl: string, endpoint: string): string {
     return `${cleanBase}/${cleanEndpoint}`;
 }
 
-export const API_BASE_URL =
+const RAW_API_BASE_URL =
     process.env.NEXT_PUBLIC_API_URL ||
     (process.env.NODE_ENV === 'production'
         ? 'https://hyper-production-72e8.up.railway.app'
         : 'http://localhost:3001');
+
+export const API_BASE_URL = RAW_API_BASE_URL.replace(/\/+$/, '');
 
 // Type Definitions
 export interface CreateAgentResponse {
@@ -33,6 +35,9 @@ export interface AgentStatus {
         leverage: number;
     };
     usdcBalance: string;
+    perpUsdcBalance?: string;
+    spotUsdcBalance?: string;
+    spotHypeBalance?: string;
     arbUsdcBalance?: string;
 }
 
